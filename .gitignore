@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv*/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+\#*\#
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model caches
+.cache/
+*.bin
+*.safetensors
+*.gguf
+
+# Benchmark datasets (re-downloadable)
+tests/files/PAWS-X/
+tests/files/XNLI/
+
+# Experiment outputs
+*.png
+*.json
+!tests/**/*.json
+
+# PDFs (test fixtures excepted)
+*.pdf
+!tests/*.pdf
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+
+# Claude
+.claude/

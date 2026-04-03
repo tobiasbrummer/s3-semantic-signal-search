@@ -1,0 +1,19 @@
+services:
+  ml-service:
+    build: .
+    container_name: ml-container
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./src:/workspace                                        # Dein Code & Arbeitsverzeichnis
+      - /home/t0bybr/Dokumente/AI/models:/workspace/models      # Dein persistenten Modelle-Ordner
+    tty: true
+

@@ -1,0 +1,351 @@
+#+TITLE: Signal Pipeline Konzept
+#+DATE: 2024-12-27
+#+STATUS: In Entwicklung
+
+* Kernidee
+
+1 Dokument = 1 "Audiodatei" mit semantischen Frequenzbändern.
+
+- Frequenzen = Embedding-Dimensionen (oder Muster darüber)
+- Gain = Stärke des Konzepts an Position t
+- t = Position im Text (tokengenau bis dokumentweit)
+
+** Chunking ist unnötig
+
+Wenn wir ein kontinuierliches Signal haben, können wir beliebig granular suchen:
+
+#+BEGIN_EXAMPLE
+Traditionell:
+  Doc → [Chunk1, Chunk2, Chunk3] → Query matcht Chunk2 → "irgendwo in Chunk2"
+
+Signal:
+  Doc → Signal[t=0...T] → Query matcht bei t=347..412 → exakte Position
+#+END_EXAMPLE
+
+Das Chunking-Problem ("relevante Info an Grenze zerschnitten") existiert nicht mehr.
+
+** Kurvenapproximation für Speicherung
+
+Statt jeden Wert für jedes t zu speichern, approximiere die Kurve:
+
+- Splines: Nur Kontrollpunkte speichern
+- Fourier: Nur wichtigste Frequenzkomponenten
+- DPCM: Nur Änderungen speichern
+- Wavelet: Nur signifikante Koeffizienten
+
+#+BEGIN_EXAMPLE
+Statt:   dim_573 = [0.32, 0.33, 0.31, 0.35, 0.34, ...]  (1000 Werte)
+Speichere: dim_573 = Spline([(0, 0.32), (500, 0.35), (1000, 0.32)])  (3 Punkte)
+#+END_EXAMPLE
+
+Voraussetzung: Kurven müssen "glatt" sein (Semantik ändert sich nicht abrupt).
+
+* Multi-Band Signal
+
+Statt nur Dense Embeddings: Verschiedene Bänder für verschiedene Aspekte.
+
+** Band-Struktur
+
+| Band | Quelle | Funktion |
+|------+--------+----------|
+| Dense | jina-v3 (1024 dims) | Semantische Ähnlichkeit |
+| SPLADE | Sparse lexical | Keyword/Term Matching |
+| GLiNER2 | Entity Recognition | Named Entities (Person, Ort, Org) |
+| Emotion | (trainiert) | Stimmung/Sentiment |
+
+** Retrieval als EQ
+
+Query-Beispiel: "Finde traurige Passagen über Berlin mit Angela Merkel"
+
+#+BEGIN_EXAMPLE
+Dense Band:  EQ boost auf "Politik"-Frequenzen
+SPLADE Band: Filter auf "Berlin"
+GLiNER Band: Filter auf PERSON="Angela Merkel", LOC="Berlin"
+Emotion Band: Filter auf "traurig"
+
+→ Kombiniert: AND über alle Bänder, gewichtet
+#+END_EXAMPLE
+
+** Vorteile vs. Traditionell
+
+| Feature | Traditionell | Multi-Band Signal |
+|---------+--------------+-------------------|
+| Semantische Suche | Ja | Ja (Dense Band) |
+| Keyword-Suche | Separat (BM25) | SPLADE Band |
+| Entity-Suche | Separat (NER) | GLiNER Band |
+| Emotions-Filter | Nein | Emotion Band |
+| Position im Doc | Nur Chunk-ID | Exakt (t) |
+| Kombinierte Queries | Komplex | EQ auf Bänder |
+
+* Offene Fragen
+
+** DONE Wie glatt sind die Kurven?
+- Ergebnis: Smoothness 0.673, Modell-Eigenschaft
+- Kurvenapproximation nur 2.5x Kompression → VERWORFEN
+- Sign-Only (32x) ist besser
+
+** DONE Wie repräsentieren wir SPLADE als Signal?
+- Entscheidung: Option B - Top-K Peaks
+- Speicherung: (term_id, weight) Paare
+- Kompression: 59.6x
+
+** TODO Funktioniert Cross-Correlation auf Multi-Band?
+- Query-Signal ⊗ Doc-Signal für jedes Band
+- Kombinierte Scores
+- Status: Document-Level validiert, Position-Level noch offen
+
+** TODO GLiNER2 als drittes Band?
+- Named Entity Recognition als Band
+- Speicherung: (entity_type, entity_text, position)
+- Experiment steht aus
+
+** TODO Emotion/Sentiment Band?
+- Trainiertes Modell für Stimmungs-Erkennung
+- Integration als viertes Band
+- Experiment steht aus
+
+* Validierte Erkenntnisse (Stand 2024-12-27)
+
+** Weighted Min Scoring
+- 100.9% von Brute Force Cosine auf SciFact
+- Besser als Standard-Retrieval
+- Formel: sum(sign(q)*sign(d) * min(|q|,|d|)) / sum(min(|q|,|d|))
+
+** Sign Hamming
+- 96.1% von Brute Force
+- 32x Kompression (1 bit pro Dimension)
+- Geeignet für Coarse Filter
+
+** Phase Coherent
+- Mathematisch identisch mit Sign Hamming
+- Aber langsamer (keine Bit-Operationen)
+
+* Session 2024-12-27: Aktuelle Erkenntnisse
+
+** Benchmark-Ergebnisse (SciFact, 5000 Docs, 300 Queries, jina-v3)
+
+| Methode              | R@10  | vs BF   | Zeit    |
+|----------------------+-------+---------+---------|
+| Brute Force (Cosine) | 79.7% | 100.0%  | 0.10ms  |
+| Weighted Min         | 80.4% | 100.9%  | 49.04ms |
+| Phase Coherent       | 76.6% | 96.1%   | 21.30ms |
+| Sign Hamming         | 76.6% | 96.1%   | 6.04ms  |
+| Anti-Resonance       | 80.4% | 100.9%  | 136ms   |
+
+Kernerkenntnisse:
+- Weighted Min ÜBERTRIFFT Cosine Similarity (100.9%)
+- Sign Hamming = 96.1% bei 32x Kompression
+- Anti-Resonance bringt keinen Mehrwert
+
+** Kurven-Glattheit Test (50 SciFact Docs)
+
+| Metrik                    | Wert  |
+|---------------------------+-------|
+| Durchschnittliche Smooth. | 0.673 |
+| Std über Dokumente        | 0.016 |
+| 99.7% der Dimensionen     | 0.6-0.7 |
+
+Kernerkenntnisse:
+- Smoothness ist MODELL-EIGENSCHAFT, nicht dokumentabhängig
+- Kurvenapproximation bringt nur ~2.5x Kompression
+- Sign-Only bleibt bei 32x - klarer Gewinner
+- Temporale Korrelation existiert (0.67 > 0.5), nützlich für Position-Finding
+
+** Entscheidungen
+
+1. Kurvenapproximation als Kompression: VERWORFEN
+2. Sign-Only als Kompression: BESTÄTIGT (32x, 96.1% Recall)
+3. Weighted Min als Scoring: BESTÄTIGT (100.9% von BF)
+4. Fokus jetzt: Position-Level Retrieval testen
+
+** Konzept-Diskussion: Multi-Band Signal
+
+Idee: Verschiedene Embedding-Typen als separate Bänder:
+- Band 1: Dense Embeddings (jina-v3) → Semantik
+- Band 2: SPLADE → Lexikalisches Matching
+- Band 3: GLiNER2 → Named Entities
+- Band 4: Emotion/Sentiment (trainiert)
+
+Retrieval = EQ auf Bänder anwenden
+
+** Konzept-Diskussion: Chunking unnötig
+
+Wenn wir ein kontinuierliches Signal haben (Sliding Window):
+- Kein Chunking-Problem mehr
+- Exakte Position (t) statt "Chunk-ID"
+- Variable Granularität (Token-genau bis Dokument-weit)
+
+** Position-Level Retrieval Test (SciFact, 50 Docs)
+
+| Methode      | Accuracy |
+|--------------+----------|
+| Cosine       | 100%     |
+| Weighted Min | 100%     |
+| Sign Hamming | 100%     |
+
+Kernerkenntnisse:
+- Sign Hamming (32x komprimiert) findet exakte Position genauso zuverlässig wie Cosine
+- Die 3.9% Recall-Verlust auf Document-Level entstehen durch marginale Score-Unterschiede, nicht durch falsche Positionen
+- Korrelation zwischen Methoden: rho > 0.97
+
+** Entscheidungen (aktualisiert)
+
+1. Kurvenapproximation als Kompression: VERWORFEN
+2. Sign-Only als Kompression: BESTÄTIGT (32x, 96.1% Recall)
+3. Weighted Min als Scoring: BESTÄTIGT (100.9% von BF)
+4. Position-Level Retrieval: BESTÄTIGT (100% Accuracy mit allen Methoden)
+
+** Cluster-basiertes Matching - DURCHBRUCH (SciFact, 500 Docs, 35 Queries)
+
+Problem mit naivem Dimensions-Matching:
+- Max-per-Dim: Für jede Dimension besten Match suchen → 34% Recall
+- Grund: Matches kommen von verschiedenen Positionen, die nichts miteinander zu tun haben
+
+Lösung: Cluster-Voting
+- Für jede Position t: Zähle wie viele Dimensionen dort matchen
+- Score = beste Position (höchste Überlappung)
+
+| Methode              | R@10   | vs Baseline | Zeit   |
+|----------------------+--------+-------------+--------|
+| Best Window (Cosine) | 100.0% | Baseline    | 3.88s  |
+| Cluster Sign         | 100.0% | 100.0%      | 3.33s  |
+| Cluster Sign Weight. | 100.0% | 100.0%      | 4.96s  |
+| Cluster Voting t=0.5 | 100.0% | 100.0%      | 7.04s  |
+
+Threshold-Sweep zeigt: Ab t=0.3 erreichen alle Methoden 100%.
+
+Kernerkenntnisse:
+- CLUSTER SIGN IST SCHNELLER ALS COSINE (3.33s vs 3.88s)
+- Sign-only (1 bit) reicht aus: 32x Kompression, 0% Recall-Verlust
+- Der Positions-Cluster war der Schlüssel: Konzepte müssen räumlich zusammen auftreten
+- Max-per-Dim (verstreut): 34% → Cluster (gleiche Position): 100%
+
+** Chunking-Problem: GELÖST
+
+Die Query "findet" die Position im Dokument, wo die meisten ihrer Dimensionen
+gleichzeitig matchen - unabhängig von vordefinierten Chunk-Grenzen.
+
+Traditionell:
+- Chunks = feste Fenster mit harten Grenzen
+- Info an Grenzen wird zerschnitten
+- Granularität ist fix
+
+Signal + Cluster:
+- Sliding Window = überlappende Positionen
+- Cluster-Voting findet beste Position dynamisch
+- Keine harten Grenzen mehr
+- Exakte Position (t) statt "Chunk-ID"
+
+** Entscheidungen (final für Phase 1)
+
+1. Kurvenapproximation als Kompression: VERWORFEN
+2. Sign-Only als Kompression: BESTÄTIGT (32x, 100% Recall mit Cluster)
+3. Weighted Min als Document-Level Scoring: BESTÄTIGT (100.9% von BF)
+4. Cluster Sign als Position-Level Scoring: BESTÄTIGT (100%, schneller als Cosine)
+5. Chunking-Problem: GELÖST durch Cluster-Voting
+
+** SPLADE Integration - VALIDIERT
+
+SPLADE als zweites Band neben Dense Embeddings:
+- Sparse lexikalische Embeddings (~30k Vocab, aber nur 50-100 aktive Peaks)
+- Kompression: 59.6x (besser als Sign-only 32x)
+- Speicherung: Top-K Peaks als (term_id, weight) Paare
+
+| Metrik | Wert |
+|--------|------|
+| Encoding Zeit | 18-28ms (CPU) |
+| Peaks pro Text | 33-75 |
+| Kompression | 59.6x |
+
+** Multi-Band Retrieval - DURCHBRUCH (SciFact, 5000 Docs, 295 Queries)
+
+| Methode | R@10 | vs Dense |
+|---------+------+----------|
+| Dense Cosine | 81.7% | Baseline |
+| Dense Sign | 79.3% | 97.1% |
+| SPLADE Dot | 83.4% | 102.1% |
+| Combined (0.5/0.5) | 87.1% | 106.6% |
+| Combined (0.3/0.7) | 88.5% | 108.3% |
+
+Kernerkenntnisse:
+- SPLADE ALLEINE SCHLÄGT DENSE (83.4% vs 81.7%)
+- KOMBINATION BRINGT +6.8% ABSOLUT (81.7% → 88.5%)
+- Beste Gewichtung: 0.3 Dense + 0.7 SPLADE
+- Jaccard funktioniert nicht (58.3%) - Gewichtung ist wichtig
+
+** Entscheidungen (final für Phase 2)
+
+1. SPLADE als Band: BESTÄTIGT (83.4% solo, besser als Dense)
+2. Multi-Band Kombination: BESTÄTIGT (+6.8% vs Dense only)
+3. Optimale Gewichtung: 0.3 Dense + 0.7 SPLADE
+4. SPLADE Speicherung: Top-K Peaks (59.6x Kompression)
+
+** Multi-Band Scoring Formel
+
+#+BEGIN_EXAMPLE
+score = 0.3 * dense_score + 0.7 * splade_score
+
+Wobei:
+- dense_score  = Cluster_Sign(query, doc)     # 32x komprimiert
+- splade_score = Sparse_Dot(query, doc) / 50  # Normalisierung
+#+END_EXAMPLE
+
+* Such-Architektur (Konzept)
+
+** Die 4 Such-Modi
+
+| Modus | Input | Methode | Output |
+|-------|-------|---------|--------|
+| Keyword | Exakter Begriff | SPLADE Inverted Index | doc_ids + positions |
+| Semantik | Bedeutung/Konzept | Sign-Hash Matching | doc_ids + scores |
+| Fuzzy | Vertipper | Levenshtein/n-gram | korrigierte Begriffe |
+| Pattern | Beispiel-Absatz / Kurve | Cross-Correlation (FFT) | doc_ids + positions |
+
+** Pipeline
+
+#+BEGIN_EXAMPLE
+1. Query-Analyse    → Welche Modi sind relevant?
+2. Coarse Filter    → SPLADE + Sign (schnell, parallel)
+3. Fine Ranking     → Dense Cosine / Pattern Match (präzise)
+4. Position Finding → Cluster-Voting / Spline-Lookup
+5. Result           → [(doc_id, position, score, snippet), ...]
+#+END_EXAMPLE
+
+** Was Pattern-Suche NEU ermöglicht
+
+Dinge die klassische RAG nicht kann:
+
+1. Query-by-Example: Markiere Absatz → "Finde ähnliche Argumentationen"
+2. Dramaturgie-Suche: "Erst negativ, dann positiv" als Kurve
+3. Anomaly Detection: "Wo weicht dieser Vertrag vom Standard ab?"
+4. Zeitliche Muster: "Wann kippt die Stimmung im Gespräch?"
+
+** Speicher-Hybrid
+
+#+BEGIN_EXAMPLE
+Pro Dokument:
+├── Sign-Hashes (128 bytes/position) → Schnelle Filterung
+├── Spline-Kontrollpunkte (~10KB)    → Kurven-Suche
+└── SPLADE Inverted Index            → Keyword-Lookup
+
+Total: Viel kleiner als raw float32 (4KB/position)
+#+END_EXAMPLE
+
+** Nächste Schritte
+
+1. SPLADE-First Pipeline implementieren
+2. Sign-Hashing für Coarse Filter
+3. Spline-Speicherung für Pattern-Suche
+4. Cross-Correlation (FFT) für Kurven-Matching
+5. Optional: GLiNER2, Emotion Band
+
+* Dateien
+
+- [[file:code/retrieval_benchmark.py][retrieval_benchmark.py]] - Benchmark mit Weighted Min, Sign Hamming
+- [[file:code/curve_smoothness_test.py][curve_smoothness_test.py]] - Kurven-Glattheit Analyse
+- [[file:code/position_retrieval_test.py][position_retrieval_test.py]] - Position-Level Retrieval Test
+- [[file:code/dimension_matching_test.py][dimension_matching_test.py]] - Cluster-basiertes Matching (DURCHBRUCH)
+- [[file:code/splade_test.py][splade_test.py]] - SPLADE Encoder Test
+- [[file:code/multiband_retrieval_test.py][multiband_retrieval_test.py]] - Multi-Band Retrieval (DURCHBRUCH)
+- [[file:code/s3_chunking.py][s3_chunking.py]] - MDCT/Onset Chunking Strategien
+- [[file:wave2.org][wave2.org]] - Vorherige Experimente (Phase Coherent, Gates)

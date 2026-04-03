@@ -1,0 +1,173 @@
+#+TITLE: Project Spec: Local Contract Guardian
+#+AUTHOR: Architecture Bot & User
+#+DATE: 2024-11-20
+#+STARTUP: indent overview
+#+TAGS: CORE(c) NLP(n) UI(u) DB(d) LLM(l)
+
+* PROJ Projekt Vision & Ziele
+  :PROPERTIES:
+  :CUSTOM_ID: vision
+  :END:
+  Ein lokales High-End-System zur Analyse von Textänderungen in Verträgen.
+  Fokus liegt auf *Qualität* und *Datenschutz* (Local-First), nicht primär auf Geschwindigkeit.
+
+  *Kern-Philosophie:* "Human-in-the-Loop" mit maximaler Vor-Analyse durch deterministische Tools und spezialisierte Modelle, bevor das LLM urteilt.
+
+* ARCH Architektur & Tech Stack
+  :PROPERTIES:
+  :CUSTOM_ID: architecture
+  :END:
+** Backend (Python)
+   - [ ] Language: Python 3.10+
+   - [ ] API Framework: *FastAPI* (Async, Pydantic Support)
+   - [ ] Type Safety: Pydantic (Single Source of Truth), MyPy
+   - [ ] Linting: Ruff
+   - [ ] Graph Logic: NetworkX (In-Memory für Konsistenz-Checks)
+
+** Storage (Local)
+   - [ ] Database: *SQLite* (Single File)
+   - [ ] Vector Extension: *sqlite-vec* (Embeddings direkt in der DB)
+   - [ ] Schema: Relational (Docs/Sätze) + Vektor-Index
+
+** AI / NLP Komponenten
+   - [ ] Embeddings (Dense): `jinaai/jina-embeddings-v3`
+     - Task `retrieval.passage`: Für DB-Suche / Indexierung / Re-Alignment.
+     - Task `text-matching`: Für Diff-Vergleiche (Span vs. Span).
+   - [ ] Embeddings (Sparse): `opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1`
+     - Learned Sparse Model (SPLADE-artig).
+     - Besser als BM25 durch "Document Expansion" (erkennt Synonyme).
+   - [ ] Logic Validator (NLI): `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`
+     - Cross-Encoder für Entailment/Contradiction Prüfung.
+     - Das Sicherheitsnetz gegen logische Widersprüche.
+   - [ ] NER: GLiNER `urchade/gliner_multi_v2.1` (Generalist, erkennt PER, ORG, LOC, DATE zero-shot)
+   - [ ] Parsing/POS: SpaCy `de_dep_news_trf` (Dependency Tree, Modalverben, Negation)
+   - [ ] Values: Quantulum3 (Zahlen/Einheiten Normalisierung)
+   - [ ] LLM (Reasoning): Local via Ollama/Llama.cpp/transformers (z.B. gpt-oss:20B, Qwen2.5-14B, Mistral-Nemo)
+
+** Frontend Integration
+   - [ ] Workflow: Pydantic -> OpenAPI (`openapi.json`) -> TypeScript CodeGen
+   - [ ] UI Framework: React/Tauri oder Electron (später)
+
+* CORE Pipeline Logik
+  :PROPERTIES:
+  :CUSTOM_ID: pipeline
+  :END:
+  Der Prozess vom Dokument zum Ergebnis.
+
+** Phase 1: Ingest & Strukturierung
+   - [ ] Input: PDF/Docx -> Text Extraktion.
+   - [ ] Splitting: Zerlegung in Sätze (Sentence Boundary Detection).
+   - [ ] Hashing: Erstellung von Hashes pro Satz (Dedupizierung).
+   - [ ] Cache-Lookup: Prüfen gegen SQLite.
+     - Treffer: Lade existierende Analyse.
+     - Miss: Markiere für Pipeline.
+
+** Phase 2: Diffing & Alignment
+   - [ ] Document Level: LCS (Longest Common Subsequence) auf Hash-Listen.
+   - [ ] Re-Alignment (Rescue):
+     - Falls LCS fehlschlägt (Hash unbekannt), suche via `sqlite-vec` im gelöschten Kontext nach semantisch ähnlichen Sätzen.
+   - [ ] Span Isolation: Wort-Level Diff (`difflib`) für identifizierte Satz-Paare.
+
+** Phase 3: "The Evidence Collector" (Forensik)
+   Führe ALLE Checks auf geänderten Spans aus:
+   - [ ] *Diff Check:* Was wurde textlich ersetzt?
+   - [ ] *Dense Check:* Jina Cosine Sim (Task `text-matching`). >0.9 = Verdacht auf Paraphrase.
+   - [ ] *Learned Sparse Check:* OpenSearch Model.
+     - Niedriger Overlap (< 0.4) signalisiert harten Austausch von Fachbegriffen/Schlüsselwörtern.
+   - [ ] *NLI Logic Check (Cross-Encoder):*
+     - Wird getriggert bei hoher Dense-Similarity aber Text-Unterschieden.
+     - Output: `Contradiction` (Alarm!) vs. `Entailment` (OK).
+   - [ ] *Grammar Check (SpaCy):*
+     - Modalverb geändert (muss -> kann)?
+     - Subjekt/Objekt Vertauschung (Dependency Parse)?
+     - Negation hinzugefügt/entfernt?
+   - [ ] *Fact Check:*
+     - GLiNER: Entity Tausch (Müller -> Meier)?
+     - Quantulum: Wert-Vergleich (6 Wochen != 30 Tage).
+
+** Phase 4: LLM Verdict (Reasoning)
+   - [ ] Input: JSON mit allen "Beweisen" aus Phase 3 + Kontext (Satz davor/danach).
+   - [ ] Prompt Strategy: "Analysiere Änderung. Bewerte Risiko basierend auf den Beweisen."
+   - [ ] Output: Strukturiertes JSON (Pydantic Modell `ChangeVerdict`).
+
+* DATA Datenmodelle (Pydantic)
+  :PROPERTIES:
+  :CUSTOM_ID: datamodels
+  :END:
+
+#+BEGIN_SRC python
+class ChangeType(str, Enum):
+    TRIVIAL = "trivial"   # Tippfehler, Formatierung
+    SEMANTIC = "semantic" # Umformulierung, gleicher Inhalt
+    CONTENT = "content"   # Inhaltliche Änderung
+    CRITICAL = "critical" # Gefährliche Änderung (Fristen, Haftung)
+
+class Evidence(BaseModel):
+    dense_score: float
+    sparse_overlap: float     # OpenSearch Neural Score
+    nli_category: str         # "contradiction", "neutral", "entailment"
+    nli_confidence: float     # z.B. 0.98
+    entity_changes: List[str] # ["Müller -> Meier"]
+    value_changes: List[str]  # ["6 weeks -> 30 days"]
+    dependency_warning: bool
+
+class Change(BaseModel):
+    id: int
+    doc_id: str
+    sentence_hash: str
+    text_old: str
+    text_new: str
+    evidence: Evidence
+    verdict: ChangeType
+    llm_explanation: str
+#+END_SRC
+
+* FEAT Features & Use Cases
+  :PROPERTIES:
+  :CUSTOM_ID: features
+  :END:
+
+** Reporting (Das Endprodukt)
+   - [ ] LLM Generierung: Erstellt Zusammenfassung basierend auf der Liste der `Change` Objekte.
+   - [ ] 2-Stufen-System:
+     1. Einzel-Analyse (Micro)
+     2. Report-Genese (Macro)
+   - [ ] Referenzierung: Bericht enthält `[Ref: ID]` Marker zu den Beweisen.
+
+** UI: "Click-to-Verify"
+   - [ ] Split View: Links Bericht, Rechts Diff.
+   - [ ] Interaktion: Klick auf `[Ref: ID]` scrollt zum Diff.
+   - [ ] Export: PDF mit "Beweis-Anhang".
+
+** Advanced Analysis (Graph & Search)
+   - [ ] Konsistenz-Check: NetworkX Graph für Entity-Beziehungen ("Ghost Entities", tote Verweise).
+   - [ ] Playbook-Check: Vergleich neuer Vertrag gegen Standard-Klauseln (via Vektor-Suche + NLI).
+   - [ ] Anonymisierung: Auto-Redaction von Entities/Werten via GLiNER.
+
+* PLAN Implementierungs-Phasen
+  :PROPERTIES:
+  :CUSTOM_ID: roadmap
+  :END:
+
+** TODO Phase 1: Das Skelett (MVP)
+   - [ ] Setup Python Project (Poetry/Pip, Ruff, Pydantic).
+   - [ ] Implementiere SQLite + Hashing Store.
+   - [ ] Implementiere einfachen Diff (LCS + difflib).
+   - [ ] Output: Liste von geänderten Sätzen (ohne KI-Bewertung).
+
+** TODO Phase 2: Die Augen (Semantik & Logik)
+   - [ ] Integration `jina-embeddings-v3` & `sqlite-vec`.
+   - [ ] Integration `opensearch-neural-sparse` (Sparse Check).
+   - [ ] Integration `Cross-Encoder` (NLI Check).
+   - [ ] Integration `Quantulum3` (Zahlen Check).
+
+** TODO Phase 3: Das Gehirn (LLM)
+   - [ ] Setup Ollama/Llama.cpp Anbindung.
+   - [ ] Prompt Engineering für `ChangeVerdict`.
+   - [ ] Pydantic Validierung des LLM Outputs.
+
+** TODO Phase 4: Die Lupe (High-End)
+   - [ ] SpaCy Dependency Parsing.
+   - [ ] GLiNER Integration.
+   - [ ] NetworkX Konsistenz-Checks.
+   - [ ] Generierung des Abschlussberichts & Frontend Code-Gen.

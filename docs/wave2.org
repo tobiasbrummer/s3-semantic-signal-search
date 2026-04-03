@@ -1,0 +1,1169 @@
+:QUESTION:
+Wir waren hier, leider war der chat zu lang.
+Gute Fragen! Lass mich als Audio-Engineer nachdenken:
+┌─────────────────────────────────────────────────────────────────────────────┐
+
+│                    OFFENE KONZEPTE                                          │
+
+├─────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                             │
+
+│  1. "t" - ZEIT / TEMPORAL                                                   │
+
+│     ─────────────────────                                                   │
+
+│     In Audio: Phase-Beziehungen ändern sich über die Zeit                  │
+
+│     In Embeddings: Die Dimension-Reihenfolge IST eine Art "Zeit"           │
+
+│                                                                             │
+
+│     Idee: PHASE-GRADIENT                                                    │
+
+│     Wie ändert sich das Vorzeichen über die Dimensionen?                   │
+
+│     Ähnliche Texte haben vielleicht ähnliche "Phasen-Verläufe"             │
+
+│                                                                             │
+
+│                                                                             │
+
+│  2. AUSLÖSCHUNG                                                             │
+
+│     ────────────                                                            │
+
+│     Wir nutzen nur KONSTRUKTIVE Interferenz (gleiche Signs)                │
+
+│     Aber DESTRUKTIVE Interferenz ist auch Information!                     │
+
+│                                                                             │
+
+│     Query: +  Doc: -  → Beide AKTIV aber GEGENPHASIG                       │
+
+│                       → Vielleicht "Gegenteil von"?                        │
+
+│                                                                             │
+
+│     Idee: Dimensionen wo BEIDE stark sind aber gegenphasig                 │
+
+│           = ANTI-RESONANZ = aktiv bestrafen                                │
+
+│                                                                             │
+
+│                                                                             │
+
+│  3. GATES / FILTER                                                          │
+
+│     ──────────────                                                          │
+
+│     Problem: Interference Index nutzt ALLE Bänder gleich                   │
+
+│              Aber echte Semantik ist nicht gleichmäßig verteilt            │
+
+│                                                                             │
+
+│     Audio-Lösung: NOISE GATE + SIDECHAIN                                   │
+
+│     • Gate: Nur Dimensionen zählen wo Query LAUT ist                       │
+
+│     • Sidechain: Nur wo BEIDE Signale stark sind                           │
+
+│                                                                             │
+
+└─────────────────────────────────────────────────────────────────────────────┘
+Lass mich diese Konzepte implementieren und testen:
+Das ist ein **echter Durchbruch**!
+┌─────────────────────────────────────────────────────────────────────────────┐
+
+│                    ERGEBNISSE MIT ECHTEN DATEN                              │
+
+├─────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                             │
+
+│  Brute Force:        80.9% Recall@10  (Baseline)                           │
+
+│  Phase Coherent:     74.8% Recall@10  (92.5% von BF) ✅                     │
+
+│  Interference Index: 20.4% Recall@10  (25.3% von BF) ❌                     │
+
+│                                                                             │
+
+│                                                                             │
+
+│  PHASE COHERENT FUNKTIONIERT!                                               │
+
+│  ────────────────────────────                                               │
+
+│                                                                             │
+
+│  92.5% von Brute Force Recall - das ist nutzbar!                           │
+
+│                                                                             │
+
+│  Was das bedeutet:                                                          │
+
+│  • Vorzeichen-Übereinstimmung IST ein guter Proxy für Semantik            │
+
+│  • Die "Phasen" der Embedding-Dimensionen tragen Information              │
+
+│  • Einfache binäre Info (Sign) behält 92.5% der Ranking-Qualität          │
+
+│                                                                             │
+
+│                                                                             │
+
+│  WARUM INTERFERENCE INDEX VERSAGT:                                          │
+
+│  ──────────────────────────────────                                         │
+
+│                                                                             │
+
+│  Bei synthetischen Daten: Cluster haben klar getrennte "Frequenzbänder"    │
+
+│  Bei echten Embeddings: Semantik ist ÜBERALL verteilt, nicht lokalisiert   │
+
+│                                                                             │
+
+│  → Band-basierte Filterung funktioniert nicht für echte Semantik           │
+
+│  → Phase Coherent nutzt ALLE Dimensionen gleichmäßig                       │
+
+│                                                                             │
+
+└─────────────────────────────────────────────────────────────────────────────┘
+**Die nächste Frage:** Können wir Phase Coherent beschleunigen?
+┌─────────────────────────────────────────────────────────────────────────────┐
+
+│                    PHASE COHERENT OPTIMIERUNG                               │
+
+├─────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                             │
+
+│  Aktuell: 22.77ms (42x langsamer als Brute Force)                          │
+
+│                                                                             │
+
+│  WARUM SO LANGSAM?                                                          │
+
+│  Der Code macht zwei Matrix-Operationen:                                    │
+
+│  1. Sign-Produkte berechnen                                                 │
+
+│  2. Cosine berechnen                                                        │
+
+│  → Doppelte Arbeit!                                                         │
+
+│                                                                             │
+
+│                                                                             │
+
+│  OPTIMIERUNG:                                                               │
+
+│  ────────────                                                               │
+
+│                                                                             │
+
+│  Phase Coherent = sign(q) · sign(d) gemittelt                              │
+
+│                                                                             │
+
+│  Trick: Pre-compute sign(d) als BINÄR (0/1 statt -1/+1)                    │
+
+│         Dann: Hamming-Distanz zwischen Query-Signs und Doc-Signs           │
+
+│                                                                             │
+
+│  1024 Dimensionen → 128 Bytes (1024 Bits)                                  │
+
+│  Hamming-Distanz ist EXTREM schnell (XOR + POPCOUNT)                       │
+
+│                                                                             │
+
+│                                                                             │
+
+│  DAS IST... SIGN-BASED HASHING!                                            │
+
+│  ─────────────────────────────                                              │
+
+│                                                                             │
+
+│  Wir sind zurück bei einer Hash-Methode, aber:                             │
+
+│  • Nicht Random Projection (29% Recall)                                    │
+
+│  • Sondern SIGN Projection (92.5% Recall)                                  │
+
+│                                                                             │
+
+│  Der Unterschied:                                                           │
+
+│  • LSH: hash(random_projection(embedding))                                 │
+
+│  • Sign: hash(sign(embedding))                                             │
+
+│                                                                             │
+
+│  Sign behält mehr Information weil es die ECHTE Struktur nutzt!            │
+
+│                                                                             │
+
+└─────────────────────────────────────────────────────────────────────────────┘
+Soll ich einen optimierten **Sign-Based Index** implementieren? Das wäre:
+**Speicher:** 128 Bytes pro Dokument (statt 4096 Bytes für Float32)
+**Suche:** Hamming-Distanz (XOR + POPCOUNT) - extrem schnell
+**Recall:** ~92% von Brute Force (basierend auf Phase Coherent Ergebnis)
+Das wäre der praktische Mittelweg: Fast so gut wie Brute Force, aber mit 32x weniger Speicher und potenziell schnellerer Suche.
+
+:END:
+00:19
+
+Perfekt,
+ ich sehe den Kontext! Die Phase Coherent Erkenntnis ist wirklich 
+spannend - 92.5% Recall mit nur Vorzeichen-Information.
+
+Lass mich zuerst die aktuellen Dateien anschauen, um den Stand zu verstehen:
+
+Die Uploads sind leer, aber der Kontext ist klar aus deiner Beschreibung. Lass mich den *Sign-Based Index* implementieren:
+:QUESTION:
+Warum sind die leer? Wir waren außerdem noch an dem Thema mit gate usw. Das hat Priorität. Nicht irgendwas machen ohne den Kontext.
+
+:END:
+00:21
+
+Du hast recht, Entschuldigung! Lass mich erst den Kontext lesen:
+
+Lass mich den Rest des Codes sehen, besonders die Phase Coherent und Interference Index Implementierungen:
+
+Jetzt verstehe ich den Kontext! Du hattest drei offene Konzepte, mit *Gates/Filter* als Priorität:
+
+1. *Noise Gate*: Nur Dimensionen zählen wo Query LAUT ist
+2. *Sidechain*: Nur wo BEIDE Signale stark sind
+3. Anti-Resonanz (destruktive Interferenz bestrafen)
+
+Lass mich das implementieren und testen:
+
+Interessante
+ Ergebnisse! Aber die absoluten Recall-Werte sind niedrig (~10%) - das 
+liegt am hohen Noise-Level. Lass mich mit verschiedenen Noise-Levels 
+testen und auch die *Weighted (min)* Erkenntnis genauer untersuchen:
+
+Das ist spannend! Lass mich die Erkenntnisse visualisieren:
+
+#+BEGIN_EXAMPLE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ERGEBNISSE: GATED SEARCH                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  RELATIVE TO BRUTE FORCE (%)                                                │
+│                                                                             │
+│  Noise    Phase Coherent   Weighted(min)   Sidechain Gate                   │
+│  ─────────────────────────────────────────────────────────                  │
+│  0.1          89.0%           99.5%           98.1%   ← Low noise           │
+│  0.2          66.2%           97.0%           80.0%                         │
+│  0.3          82.7%           98.6%           89.1%                         │
+│  0.4          89.5%          100.7%           97.4%   ← Deine Tests         │
+│  0.5         105.8%          107.4%          121.5%   ← High noise          │
+│  0.6         102.7%          100.0%          124.5%      BESSER als BF!     │
+│  0.7          99.1%           99.1%          116.7%                         │
+│  0.8          98.1%          101.0%          120.4%                         │
+│                                                                             │
+│                                                                             │
+│  KEY INSIGHTS:                                                              │
+│  ─────────────                                                              │
+│                                                                             │
+│  1. WEIGHTED (MIN) = Kontinuierliches Sidechain Gate                        │
+│     • Erreicht ~97-100% von Brute Force bei ALLEN Noise-Levels             │
+│     • Score = sum(sign(q)*sign(d) * min(|q|,|d|)) / sum(weights)           │
+│     • "Beide müssen laut sein" als weiches Gate                            │
+│                                                                             │
+│  2. SIDECHAIN GATE übertrifft Brute Force bei HIGH NOISE!                  │
+│     • Bei Noise ≥ 0.5: 107-125% von Brute Force Recall                     │
+│     • Grund: Fokus auf gemeinsam starke Dims filtert Noise                 │
+│     • Das ist ein echtes DENOISING-Verhalten!                              │
+│                                                                             │
+│  3. QUERY GATE versagt                                                      │
+│     • Asymmetrisch → Information Loss                                       │
+│     • Query-Noise wird überbewertet                                         │
+│                                                                             │
+│                                                                             │
+│  AUDIO-ANALOGIE:                                                            │
+│  ───────────────                                                            │
+│                                                                             │
+│  Weighted (min) = SIDECHAIN COMPRESSOR                                      │
+│  • Signal A moduliert Signal B                                              │
+│  • min(|A|,|B|) = "nur wenn beide aktiv"                                   │
+│  • Wie ein Ducker: Leise Stellen werden noch leiser                        │
+│                                                                             │
+│  Bei Noise: Das ist wie ein NOISE GATE das nur öffnet                      │
+│             wenn BEIDE Signale stark sind                                   │
+│             → Rauschen wird effektiv gefiltert                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+#+END_EXAMPLE
+
+Das *Weighted (min)* ist mathematisch elegant und praktisch effektiv. Soll ich:
+
+1. *Sign-Based Hamming* mit min-weighting kombinieren? (für Speed)
+2. *Die Theorie-Dokumente* updaten mit dieser Erkenntnis?
+3. *Anti-Resonance* noch mal genauer testen? (Die ersten Tests zeigten gemischte Ergebnisse)
+[[https://support.anthropic.com/en/articles/8525154-claude-is-providing-incorrect-or-misleading-responses-what-s-going-on][Claude ist eine KI und kann Fehler machen. 
+Bitte überprüfe die Antworten.]][[https://support.anthropic.com/en/articles/8525154-claude-is-providing-incorrect-or-misleading-responses-what-s-going-on][Claude ist eine KI und kann Fehler machen. Bitte überprüfe die Antworten.]]
+
+** Resonance retrieval · PY
+~1#!/usr/bin/env python3
+2"""
+3RESONANCE-BASED SEMANTIC RETRIEVAL
+4
+5Thinking like audio engineers:
+6
+71. RESONANZ: Wenn Query und Dokument in denselben Frequenzbändern 
+8   "schwingen", verstärken sie sich gegenseitig.
+9
+102. AUSLÖSCHUNG: Gegenphasige Signale löschen sich aus.
+11   → Hohe Auslöschung = NICHT ähnlich
+12
+133. INTERFERENZ-ENERGIE: 
+14   E(combined) = E(query) + E(doc) + 2*Interference
+15   → Hohe kombinierte Energie = konstruktive Interferenz = ähnlich
+16
+174. SPEKTRALE SIGNATUR:
+18   Nicht einzelne Peaks, sondern Band-Energien.
+19   "Bass-lastig", "Mid-heavy", etc.
+20
+215. Q-FAKTOR (Güte):
+22   Schmalbandige Resonanz = spezifischer Match
+23   Breitbandige Resonanz = allgemeiner Match
+24
+25Author: Claude & Toby (Audio Engineers Mode)
+26Date: December 2024
+27"""
+28
+29import numpy as np
+30from typing import List, Dict, Tuple, Set
+31from collections import defaultdict
+32from dataclasses import dataclass
+33import time
+34
+35
+36# =============================================================================
+37# AUDIO ENGINEERING TOOLKIT
+38# =============================================================================
+39
+40class AudioToolkit:
+41 """
+42    Audio engineering tools für Embedding-Analyse.
+43    """
+44
+45 @staticmethod
+46 def compute_band_energies(signal: np.ndarray, num_bands: int = 32) -> np.ndarray:
+47 """
+48        Compute energy in frequency bands.
+49
+50        Like a spectrum analyzer: Split signal into bands, measure energy per band.
+51        """
+52        band_size = len(signal) // num_bands
+53        energies = np.zeros(num_bands)
+54
+55 for i in range(num_bands):
+56            start = i * band_size
+57            end = start + band_size if i < num_bands - 1 else len(signal)
+58            band = signal[start:end]
+59            energies[i] = np.sum(band ** 2) # Energy = sum of squares
+60
+61 return energies
+62
+63 @staticmethod
+64 def compute_interference_energy(sig_a: np.ndarray, sig_b: np.ndarray) -> float:
+65 """
+66        Compute interference energy when two signals are combined.
+67
+68        E(a+b) = E(a) + E(b) + 2*dot(a,b)
+69
+70        The interference term 2*dot(a,b) tells us:
+71        - Positive: Constructive interference (signals reinforce)
+72        - Negative: Destructive interference (signals cancel)
+73        """
+74 return 2 * np.dot(sig_a, sig_b)
+75
+76 @staticmethod
+77 def compute_resonance_profile(sig_a: np.ndarray, sig_b: np.ndarray, num_bands: int = 32) -> np.ndarray:
+78 """
+79        Compute per-band resonance.
+80
+81        Where do the signals resonate (reinforce each other)?
+82        Where do they cancel?
+83        """
+84        band_size = len(sig_a) // num_bands
+85        resonance = np.zeros(num_bands)
+86
+87 for i in range(num_bands):
+88            start = i * band_size
+89            end = start + band_size if i < num_bands - 1 else len(sig_a)
+90
+91            band_a = sig_a[start:end]
+92            band_b = sig_b[start:end]
+93
+94 # Resonance = correlation in this band
+95            resonance[i] = np.dot(band_a, band_b)
+96
+97 return resonance
+98
+99 @staticmethod
+100 def spectral_centroid(energies: np.ndarray) -> float:
+101 """
+102        Spectral centroid: "Center of mass" of the spectrum.
+103
+104        Bright sounds have high centroid, dark sounds have low centroid.
+105        """
+106        total = np.sum(energies)
+107 if total < 1e-10:
+108 return len(energies) / 2
+109
+110        frequencies = np.arange(len(energies))
+111 return np.sum(frequencies * energies) / total
+112
+113 @staticmethod
+114 def spectral_spread(energies: np.ndarray, centroid: float = None) -> float:
+115 """
+116        Spectral spread: How "wide" is the spectrum?
+117
+118        Narrow = focused on specific frequencies
+119        Wide = broadband noise
+120        """
+121 if centroid is None:
+122            centroid = AudioToolkit.spectral_centroid(energies)
+123
+124        total = np.sum(energies)
+125 if total < 1e-10:
+126 return 0
+127
+128        frequencies = np.arange(len(energies))
+129        variance = np.sum(((frequencies - centroid) ** 2) * energies) / total
+130 return np.sqrt(variance)
+131
+132 @staticmethod
+133 def spectral_flatness(energies: np.ndarray) -> float:
+134 """
+135        Spectral flatness: Tonality vs Noise.
+136
+137        1.0 = White noise (flat spectrum)
+138        0.0 = Pure tone (single peak)
+139
+140        Geometric mean / Arithmetic mean
+141        """
+142        energies = np.maximum(energies, 1e-10) # Avoid log(0)
+143
+144        geometric_mean = np.exp(np.mean(np.log(energies)))
+145        arithmetic_mean = np.mean(energies)
+146
+147 return geometric_mean / arithmetic_mean
+148
+149
+150# =============================================================================
+151# RESONANCE INDEX
+152# =============================================================================
+153
+154class ResonanceIndex:
+155 """
+156    Index based on resonance patterns.
+157
+158    Key insight: Ähnliche Dokumente haben ähnliche "aktive Bänder".
+159
+160    Statt Peak-Positionen (Shazam) nutzen wir Band-Energie-Signaturen.
+161    """
+162
+163 def __init__(self,
+164                 num_bands: int = 32,
+165                 energy_threshold_percentile: float = 75,
+166                 use_phase: bool = True):
+167 """
+168        Args:
+169            num_bands: Number of frequency bands
+170            energy_threshold_percentile: Bands above this percentile are "active"
+171            use_phase: Also consider sign (phase) of dominant dimension per band
+172        """
+173        self.num_bands = num_bands
+174        self.energy_threshold_percentile = energy_threshold_percentile
+175        self.use_phase = use_phase
+176
+177 # Storage
+178        self.doc_ids = []
+179        self.doc_embeddings = None
+180        self.doc_band_energies = None
+181        self.doc_band_phases = None
+182        self.doc_signatures = None # Binary: which bands are active
+183
+184 # Inverted index: active_band → [doc_indices]
+185        self.band_index = defaultdict(list)
+186
+187 def _compute_signature(self, embedding: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+188 """
+189        Compute band signature for an embedding.
+190
+191        Returns:
+192            energies: Energy per band
+193            phases: Dominant phase per band (+1 or -1)
+194            active: Boolean mask of active bands
+195        """
+196        band_size = len(embedding) // self.num_bands
+197        energies = np.zeros(self.num_bands)
+198        phases = np.zeros(self.num_bands)
+199
+200 for i in range(self.num_bands):
+201            start = i * band_size
+202            end = start + band_size if i < self.num_bands - 1 else len(embedding)
+203            band = embedding[start:end]
+204
+205 # Energy
+206            energies[i] = np.sum(band ** 2)
+207
+208 # Phase: Sign of the maximum absolute value
+209            max_idx = np.argmax(np.abs(band))
+210            phases[i] = 1 if band[max_idx] > 0 else -1
+211
+212 # Active bands: Above threshold
+213        threshold = np.percentile(energies, self.energy_threshold_percentile)
+214        active = energies > threshold
+215
+216 return energies, phases, active
+217
+218 def build(self, doc_ids: List[str], embeddings: np.ndarray):
+219 """Build the resonance index."""
+220        self.doc_ids = doc_ids
+221        self.doc_embeddings = embeddings
+222
+223        n_docs = len(doc_ids)
+224
+225        self.doc_band_energies = np.zeros((n_docs, self.num_bands))
+226        self.doc_band_phases = np.zeros((n_docs, self.num_bands))
+227        self.doc_signatures = np.zeros((n_docs, self.num_bands), dtype=bool)
+228
+229 for i, emb in enumerate(embeddings):
+230            energies, phases, active = self._compute_signature(emb)
+231
+232            self.doc_band_energies[i] = energies
+233            self.doc_band_phases[i] = phases
+234            self.doc_signatures[i] = active
+235
+236 # Add to inverted index
+237 for band_idx in np.where(active)[0]:
+238 if self.use_phase:
+239                    key = (int(band_idx), int(phases[band_idx]))
+240 else:
+241                    key = int(band_idx)
+242                self.band_index[key].append(i)
+243
+244 def search(self, query_embedding: np.ndarray, top_k: int = 10,
+245               candidate_multiplier: int = 20) -> List[Tuple[str, float]]:
+246 """
+247        Resonance-based search.
+248
+249        1. Find documents with overlapping active bands (resonance candidates)
+250        2. Compute interference energy for fine ranking
+251        """
+252        query_energies, query_phases, query_active = self._compute_signature(query_embedding)
+253
+254 # Stage 1: Find resonance candidates
+255        votes = defaultdict(int)
+256
+257 for band_idx in np.where(query_active)[0]:
+258 if self.use_phase:
+259                key = (int(band_idx), int(query_phases[band_idx]))
+260 else:
+261                key = int(band_idx)
+262
+263 for doc_idx in self.band_index.get(key, []):
+264                votes[doc_idx] += 1
+265
+266 # Get top candidates
+267        num_candidates = min(top_k * candidate_multiplier, len(self.doc_ids))
+268
+269 if votes:
+270            candidate_indices = sorted(votes.keys(), key=lambda x: -votes[x])[:num_candidates]
+271 else:
+272 # Fallback: random candidates
+273            candidate_indices = list(range(min(num_candidates, len(self.doc_ids))))
+274
+275 # Stage 2: Compute interference energy for fine ranking
+276        query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-10)
+277
+278        results = []
+279
+280 for doc_idx in candidate_indices:
+281            doc_emb = self.doc_embeddings[doc_idx]
+282            doc_norm = doc_emb / (np.linalg.norm(doc_emb) + 1e-10)
+283
+284 # Interference energy (= 2 * cosine for normalized vectors)
+285            interference = AudioToolkit.compute_interference_energy(query_norm, doc_norm)
+286
+287            results.append((self.doc_ids[doc_idx], -interference))
+288
+289        results.sort(key=lambda x: x[1])
+290 return results[:top_k]
+291
+292
+293# =============================================================================
+294# HARMONIC RESONANCE INDEX
+295# =============================================================================
+296
+297class HarmonicResonanceIndex:
+298 """
+299    Use harmonic relationships for indexing.
+300
+301    In music: Notes that are harmonically related sound "good together".
+302    E.g., C and G (perfect fifth) resonate.
+303
+304    For embeddings: Dimensions that are "harmonically related" 
+305    (e.g., d and 2d, d and 3d) should be considered together.
+306    """
+307
+308 def __init__(self,
+309                 num_fundamentals: int = 64,
+310                 harmonics: List[int] = [2, 3, 4, 5],
+311                 top_k_fundamentals: int = 8):
+312 """
+313        Args:
+314            num_fundamentals: Consider first N dimensions as potential fundamentals
+315            harmonics: Which harmonic ratios to check
+316            top_k_fundamentals: How many fundamentals to use for signature
+317        """
+318        self.num_fundamentals = num_fundamentals
+319        self.harmonics = harmonics
+320        self.top_k_fundamentals = top_k_fundamentals
+321
+322        self.doc_ids = []
+323        self.doc_embeddings = None
+324        self.doc_harmonic_signatures = {}
+325
+326 # Inverted index: (fundamental, harmonic_pattern) → [doc_indices]
+327        self.harmonic_index = defaultdict(list)
+328
+329 def _compute_harmonic_signature(self, embedding: np.ndarray) -> List[Tuple[int, Tuple]]:
+330 """
+331        Find dominant fundamentals and their harmonic patterns.
+332
+333        Returns: List of (fundamental_dim, harmonic_pattern)
+334        """
+335        dim = len(embedding)
+336
+337 # Score each potential fundamental by harmonic coherence
+338        fundamental_scores = []
+339
+340 for f in range(1, self.num_fundamentals + 1):
+341 # Fundamental value
+342            f_val = embedding[f - 1]
+343
+344 # Check harmonics
+345            harmonic_pattern = []
+346            coherence = abs(f_val)
+347
+348 for h in self.harmonics:
+349                h_idx = f * h - 1
+350 if h_idx < dim:
+351                    h_val = embedding[h_idx]
+352 # Coherent if same sign and significant
+353 if f_val * h_val > 0: # Same sign
+354                        coherence += abs(h_val) / h  # Weight by harmonic number
+355                        harmonic_pattern.append(1)
+356 else:
+357                        harmonic_pattern.append(0)
+358 else:
+359                    harmonic_pattern.append(-1) # Out of range
+360
+361            fundamental_scores.append((f, coherence, tuple(harmonic_pattern)))
+362
+363 # Get top fundamentals
+364        fundamental_scores.sort(key=lambda x: -x[1])
+365
+366        signature = []
+367 for f, score, pattern in fundamental_scores[:self.top_k_fundamentals]:
+368            signature.append((f, pattern))
+369
+370 return signature
+371
+372 def build(self, doc_ids: List[str], embeddings: np.ndarray):
+373 """Build the harmonic index."""
+374        self.doc_ids = doc_ids
+375        self.doc_embeddings = embeddings
+376
+377 for i, emb in enumerate(embeddings):
+378            signature = self._compute_harmonic_signature(emb)
+379            self.doc_harmonic_signatures[doc_ids[i]] = signature
+380
+381 for fundamental, pattern in signature:
+382                key = (fundamental, pattern)
+383                self.harmonic_index[key].append(i)
+384
+385 def search(self, query_embedding: np.ndarray, top_k: int = 10,
+386               candidate_multiplier: int = 20) -> List[Tuple[str, float]]:
+387 """Search by harmonic pattern matching."""
+388        query_signature = self._compute_harmonic_signature(query_embedding)
+389
+390 # Vote counting
+391        votes = defaultdict(int)
+392
+393 for fundamental, pattern in query_signature:
+394            key = (fundamental, pattern)
+395 for doc_idx in self.harmonic_index.get(key, []):
+396                votes[doc_idx] += 1
+397
+398 # Get candidates
+399        num_candidates = min(top_k * candidate_multiplier, len(self.doc_ids))
+400
+401 if votes:
+402            candidate_indices = sorted(votes.keys(), key=lambda x: -votes[x])[:num_candidates]
+403 else:
+404            candidate_indices = list(range(min(num_candidates, len(self.doc_ids))))
+405
+406 # Fine ranking with cosine
+407        query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-10)
+408
+409        results = []
+410 for doc_idx in candidate_indices:
+411            doc_emb = self.doc_embeddings[doc_idx]
+412            doc_norm = doc_emb / (np.linalg.norm(doc_emb) + 1e-10)
+413            sim = np.dot(query_norm, doc_norm)
+414            results.append((self.doc_ids[doc_idx], -sim))
+415
+416        results.sort(key=lambda x: x[1])
+417 return results[:top_k]
+418
+419
+420# =============================================================================
+421# SPECTRAL CENTROID INDEX
+422# =============================================================================
+423
+424class SpectralCentroidIndex:
+425 """
+426    Index by spectral characteristics (centroid, spread, flatness).
+427
+428    Intuition: 
+429    - "Bright" embeddings have high centroid (energy in high dimensions)
+430    - "Dark" embeddings have low centroid (energy in low dimensions)
+431
+432    Similar semantic content might have similar "brightness".
+433    """
+434
+435 def __init__(self,
+436                 num_bands: int = 32,
+437                 centroid_buckets: int = 16,
+438                 spread_buckets: int = 8):
+439 """
+440        Args:
+441            num_bands: For band energy computation
+442            centroid_buckets: Quantization levels for centroid
+443            spread_buckets: Quantization levels for spread
+444        """
+445        self.num_bands = num_bands
+446        self.centroid_buckets = centroid_buckets
+447        self.spread_buckets = spread_buckets
+448
+449        self.doc_ids = []
+450        self.doc_embeddings = None
+451        self.doc_features = {} # doc_id → (centroid_bucket, spread_bucket, flatness)
+452
+453 # Inverted index
+454        self.centroid_index = defaultdict(list) # centroid_bucket → [doc_indices]
+455
+456 def _compute_spectral_features(self, embedding: np.ndarray) -> Tuple[float, float, float]:
+457 """Compute spectral features."""
+458        energies = AudioToolkit.compute_band_energies(embedding, self.num_bands)
+459
+460        centroid = AudioToolkit.spectral_centroid(energies)
+461        spread = AudioToolkit.spectral_spread(energies, centroid)
+462        flatness = AudioToolkit.spectral_flatness(energies)
+463
+464 return centroid, spread, flatness
+465
+466 def build(self, doc_ids: List[str], embeddings: np.ndarray):
+467 """Build the spectral index."""
+468        self.doc_ids = doc_ids
+469        self.doc_embeddings = embeddings
+470
+471 # First pass: compute all features to find ranges
+472        all_centroids = []
+473        all_spreads = []
+474
+475 for emb in embeddings:
+476            c, s, f = self._compute_spectral_features(emb)
+477            all_centroids.append(c)
+478            all_spreads.append(s)
+479
+480        self.centroid_min = min(all_centroids)
+481        self.centroid_max = max(all_centroids)
+482        self.spread_min = min(all_spreads)
+483        self.spread_max = max(all_spreads)
+484
+485 # Second pass: index
+486 for i, emb in enumerate(embeddings):
+487            c, s, f = self._compute_spectral_features(emb)
+488
+489 # Quantize
+490            c_bucket = int((c - self.centroid_min) / (self.centroid_max - self.centroid_min + 1e-10) * self.centroid_buckets)
+491            c_bucket = min(c_bucket, self.centroid_buckets - 1)
+492
+493            s_bucket = int((s - self.spread_min) / (self.spread_max - self.spread_min + 1e-10) * self.spread_buckets)
+494            s_bucket = min(s_bucket, self.spread_buckets - 1)
+495
+496            self.doc_features[doc_ids[i]] = (c_bucket, s_bucket, f)
+497
+498 # Index by centroid (and neighboring buckets)
+499 for offset in [-1, 0, 1]:
+500                bucket = c_bucket + offset
+501 if 0 <= bucket < self.centroid_buckets:
+502                    self.centroid_index[bucket].append(i)
+503
+504 def search(self, query_embedding: np.ndarray, top_k: int = 10,
+505               candidate_multiplier: int = 20) -> List[Tuple[str, float]]:
+506 """Search by spectral similarity."""
+507        c, s, f = self._compute_spectral_features(query_embedding)
+508
+509 # Quantize query
+510        c_bucket = int((c - self.centroid_min) / (self.centroid_max - self.centroid_min + 1e-10) * self.centroid_buckets)
+511        c_bucket = min(max(c_bucket, 0), self.centroid_buckets - 1)
+512
+513 # Get candidates from same and neighboring centroid buckets
+514        candidates = set()
+515 for offset in [-2, -1, 0, 1, 2]:
+516            bucket = c_bucket + offset
+517 if 0 <= bucket < self.centroid_buckets:
+518                candidates.update(self.centroid_index.get(bucket, []))
+519
+520        num_candidates = min(top_k * candidate_multiplier, len(self.doc_ids))
+521        candidate_list = list(candidates)[:num_candidates]
+522
+523 if len(candidate_list) < num_candidates:
+524 # Add random docs if not enough
+525            remaining = set(range(len(self.doc_ids))) - candidates
+526            candidate_list.extend(list(remaining)[:num_candidates - len(candidate_list)])
+527
+528 # Fine ranking
+529        query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-10)
+530
+531        results = []
+532 for doc_idx in candidate_list:
+533            doc_emb = self.doc_embeddings[doc_idx]
+534            doc_norm = doc_emb / (np.linalg.norm(doc_emb) + 1e-10)
+535            sim = np.dot(query_norm, doc_norm)
+536            results.append((self.doc_ids[doc_idx], -sim))
+537
+538        results.sort(key=lambda x: x[1])
+539 return results[:top_k]
+540
+541
+542# =============================================================================
+543# CONSTRUCTIVE INTERFERENCE SEARCH
+544# =============================================================================
+545
+546class ConstructiveInterferenceSearch:
+547 """
+548    Direct interference-based search.
+549
+550    The idea: For each query, find documents where combining them
+551    produces MAXIMUM constructive interference.
+552
+553    This is mathematically equivalent to cosine similarity,
+554    but the framing helps us think about it differently.
+555    """
+556
+557 def __init__(self,
+558                 num_bands: int = 32,
+559                 use_band_weighting: bool = True):
+560 """
+561        Args:
+562            num_bands: Number of frequency bands for analysis
+563            use_band_weighting: Weight bands by query energy
+564        """
+565        self.num_bands = num_bands
+566        self.use_band_weighting = use_band_weighting
+567
+568        self.doc_ids = []
+569        self.doc_embeddings = None
+570        self.doc_band_embeddings = None # Pre-split into bands
+571
+572 def build(self, doc_ids: List[str], embeddings: np.ndarray):
+573 """Build index."""
+574        self.doc_ids = doc_ids
+575        self.doc_embeddings = embeddings
+576
+577 # Pre-compute band splits for faster search
+578        n_docs, dim = embeddings.shape
+579        band_size = dim // self.num_bands
+580
+581        self.doc_band_embeddings = embeddings.reshape(n_docs, self.num_bands, band_size)
+582
+583 def search(self, query_embedding: np.ndarray, top_k: int = 10) -> List[Tuple[str, float]]:
+584 """
+585        Search by constructive interference.
+586
+587        For each band, compute interference and weight by query band energy.
+588        """
+589        dim = len(query_embedding)
+590        band_size = dim // self.num_bands
+591
+592        query_bands = query_embedding.reshape(self.num_bands, band_size)
+593
+594 # Compute query band energies for weighting
+595 if self.use_band_weighting:
+596            query_band_energies = np.sum(query_bands ** 2, axis=1)
+597            query_band_energies = query_band_energies / (np.sum(query_band_energies) + 1e-10)
+598 else:
+599            query_band_energies = np.ones(self.num_bands) / self.num_bands
+600
+601 # Compute interference for all docs
+602 # interference[d, b] = 2 * dot(query_band[b], doc_band[d, b])
+603
+604 # Shape: (n_docs, num_bands)
+605        band_interferences = 2 * np.einsum('nb,dnb->dn', query_bands, self.doc_band_embeddings)
+606
+607 # Weight by query band energy
+608        weighted_interference = band_interferences @ query_band_energies
+609
+610 # Get top-k
+611        top_indices = np.argsort(weighted_interference)[::-1][:top_k]
+612
+613        results = []
+614 for idx in top_indices:
+615            results.append((self.doc_ids[idx], -weighted_interference[idx]))
+616
+617 return results
+618
+619
+620# =============================================================================
+621# COMBINED AUDIO INDEX
+622# =============================================================================
+623
+624class AudioSemanticIndex:
+625 """
+626    Combines multiple audio-inspired approaches.
+627
+628    Uses a voting system where different indices propose candidates,
+629    then final ranking is done by interference energy.
+630    """
+631
+632 def __init__(self,
+633                 num_bands: int = 32,
+634                 use_resonance: bool = True,
+635                 use_harmonic: bool = True,
+636                 use_spectral: bool = True):
+637
+638        self.num_bands = num_bands
+639
+640        self.indices = {}
+641
+642 if use_resonance:
+643            self.indices["resonance"] = ResonanceIndex(num_bands=num_bands)
+644 if use_harmonic:
+645            self.indices["harmonic"] = HarmonicResonanceIndex()
+646 if use_spectral:
+647            self.indices["spectral"] = SpectralCentroidIndex(num_bands=num_bands)
+648
+649        self.doc_ids = []
+650        self.doc_embeddings = None
+651
+652 def build(self, doc_ids: List[str], embeddings: np.ndarray):
+653 """Build all indices."""
+654        self.doc_ids = doc_ids
+655        self.doc_embeddings = embeddings
+656
+657 for name, index in self.indices.items():
+658            index.build(doc_ids, embeddings)
+659
+660 def search(self, query_embedding: np.ndarray, top_k: int = 10,
+661               candidates_per_index: int = 100) -> List[Tuple[str, float]]:
+662 """
+663        Search using all indices and combine results.
+664        """
+665 # Gather candidates from all indices
+666        all_candidates = set()
+667
+668 for name, index in self.indices.items():
+669            results = index.search(query_embedding, top_k=candidates_per_index)
+670 for doc_id, _ in results:
+671                doc_idx = self.doc_ids.index(doc_id)
+672                all_candidates.add(doc_idx)
+673
+674 # Fine ranking with interference
+675        query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-10)
+676
+677        results = []
+678 for doc_idx in all_candidates:
+679            doc_emb = self.doc_embeddings[doc_idx]
+680            doc_norm = doc_emb / (np.linalg.norm(doc_emb) + 1e-10)
+681
+682            interference = AudioToolkit.compute_interference_energy(query_norm, doc_norm)
+683            results.append((self.doc_ids[doc_idx], -interference))
+684
+685        results.sort(key=lambda x: x[1])
+686 return results[:top_k]
+687
+688
+689# =============================================================================
+690# BENCHMARK
+691# =============================================================================
+692
+693def benchmark_resonance_methods():
+694 """Benchmark all resonance-based methods."""
+695
+696 print("=" * 70)
+697 print("RESONANCE-BASED RETRIEVAL BENCHMARK")
+698 print("=" * 70)
+699
+700 # Create clustered data
+701    np.random.seed(42)
+702    dim = 1024
+703    n_docs = 3000
+704    n_queries = 150
+705    n_clusters = 15
+706    noise_level = 0.4
+707
+708 print(f"\nData: {n_docs} docs, {n_queries} queries, {n_clusters} clusters")
+709 print(f"Noise level: {noise_level}")
+710
+711 # Cluster centers
+712    centers = np.random.randn(n_clusters, dim)
+713    centers = centers / np.linalg.norm(centers, axis=1, keepdims=True)
+714
+715 # Documents
+716    doc_embeddings = []
+717    doc_clusters = []
+718 for i in range(n_docs):
+719        cluster = i % n_clusters
+720        noise = np.random.randn(dim) * noise_level
+721        emb = centers[cluster] + noise
+722        emb = emb / np.linalg.norm(emb)
+723        doc_embeddings.append(emb)
+724        doc_clusters.append(cluster)
+725
+726    doc_embeddings = np.array(doc_embeddings)
+727    doc_ids = [str(i) for i in range(n_docs)]
+728
+729 # Queries
+730    query_embeddings = []
+731    query_clusters = []
+732 for i in range(n_queries):
+733        cluster = np.random.randint(n_clusters)
+734        noise = np.random.randn(dim) * noise_level
+735        emb = centers[cluster] + noise
+736        emb = emb / np.linalg.norm(emb)
+737        query_embeddings.append(emb)
+738        query_clusters.append(cluster)
+739
+740    query_embeddings = np.array(query_embeddings)
+741
+742 # Methods to test
+743    methods = {
+744 "Brute Force (Baseline)": None,
+745 "Resonance Index": ResonanceIndex(num_bands=32),
+746 "Resonance (64 bands)": ResonanceIndex(num_bands=64),
+747 "Resonance (no phase)": ResonanceIndex(num_bands=32, use_phase=False),
+748 "Harmonic Resonance": HarmonicResonanceIndex(),
+749 "Spectral Centroid": SpectralCentroidIndex(num_bands=32),
+750 "Constructive Interference": ConstructiveInterferenceSearch(num_bands=32),
+751 "Combined Audio": AudioSemanticIndex(num_bands=32),
+752 }
+753
+754 # Build indices
+755 print("\nBuilding indices...")
+756
+757 for name, method in methods.items():
+758 if method is not None:
+759            start = time.time()
+760            method.build(doc_ids, doc_embeddings)
+761 print(f"  {name}: {time.time() - start:.2f}s")
+762
+763 # Evaluate
+764 print("\nEvaluating...")
+765
+766    results = {}
+767
+768 for name, method in methods.items():
+769        recalls = []
+770        times = []
+771
+772 for i in range(n_queries):
+773            query_emb = query_embeddings[i]
+774            relevant = set(str(j) for j in range(n_docs) if doc_clusters[j] == query_clusters[i])
+775
+776            start = time.time()
+777
+778 if method is None:
+779 # Brute force
+780                query_norm = query_emb / np.linalg.norm(query_emb)
+781                sims = doc_embeddings @ query_norm
+782                top_idx = np.argsort(sims)[::-1][:10]
+783                retrieved = [doc_ids[idx] for idx in top_idx]
+784 else:
+785                search_results = method.search(query_emb, top_k=10)
+786                retrieved = [doc_id for doc_id, _ in search_results]
+787
+788            times.append(time.time() - start)
+789
+790 if retrieved:
+791                hits = len(set(retrieved[:10]) & relevant)
+792                recalls.append(hits / min(len(relevant), 10))
+793 else:
+794                recalls.append(0)
+795
+796        results[name] = {
+797 "recall": np.mean(recalls) * 100,
+798 "time": np.mean(times) * 1000,
+799 }
+800
+801 # Print results
+802 print("\n" + "=" * 70)
+803 print("RESULTS")
+804 print("=" * 70)
+805
+806    baseline_recall = results["Brute Force (Baseline)"]["recall"]
+807    baseline_time = results["Brute Force (Baseline)"]["time"]
+808
+809 print(f"\n{'Method':<30} {'Recall@10':>12} {'Time (ms)':>12} {'vs Base':>10} {'Speedup':>10}")
+810 print("-" * 80)
+811
+812 for name, res in sorted(results.items(), key=lambda x: -x[1]["recall"]):
+813        relative = res["recall"] / baseline_recall * 100 if baseline_recall > 0 else 0
+814        speedup = baseline_time / res["time"] if res["time"] > 0 else 0
+815 print(f"{name:<30} {res['recall']:>11.1f}% {res['time']:>11.2f} {relative:>9.1f}% {speedup:>9.1f}x")
+816
+817 # Analysis
+818 print("\n" + "=" * 70)
+819 print("AUDIO ENGINEERING ANALYSIS")
+820 print("=" * 70)
+821
+822 # Test interference on a few queries
+823 print("\nInterference Analysis (Sample Queries):")
+824
+825 for i in range(3):
+826        query_emb = query_embeddings[i]
+827        query_cluster = query_clusters[i]
+828
+829 # Find a relevant and irrelevant doc
+830        relevant_idx = next(j for j in range(n_docs) if doc_clusters[j] == query_cluster)
+831        irrelevant_idx = next(j for j in range(n_docs) if doc_clusters[j] != query_cluster)
+832
+833        rel_emb = doc_embeddings[relevant_idx]
+834        irr_emb = doc_embeddings[irrelevant_idx]
+835
+836 # Compute interference
+837        rel_interference = AudioToolkit.compute_interference_energy(query_emb, rel_emb)
+838        irr_interference = AudioToolkit.compute_interference_energy(query_emb, irr_emb)
+839
+840 # Compute resonance profiles
+841        rel_resonance = AudioToolkit.compute_resonance_profile(query_emb, rel_emb, 8)
+842        irr_resonance = AudioToolkit.compute_resonance_profile(query_emb, irr_emb, 8)
+843
+844 print(f"\n  Query {i} (cluster {query_cluster}):")
+845 print(f"    Relevant doc: Interference={rel_interference:.3f}")
+846 print(f"    Irrelevant doc: Interference={irr_interference:.3f}")
+847 print(f"    Resonance diff: {np.sum(np.abs(rel_resonance)) - np.sum(np.abs(irr_resonance)):.3f}")
+848
+849 return results
+850
+851
+852if __name__ == "__main__":
+853    benchmark_resonance_methods()
+854~

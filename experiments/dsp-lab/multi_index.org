@@ -1,0 +1,208 @@
+#+TITLE: Project Frankenstein: Fused Sparse-Dense Embeddings
+#+AUTHOR: t0bybr
+#+DATE: 2025
+#+STARTUP: showall
+
+* 1. Zusammenfassung & Zielsetzung
+Wir haben eine neuartige "Single-Vector"-Architektur für Information Retrieval entwickelt.
+Ziel ist es, die semantische Tiefe von *Dense Embeddings* (T5) mit der lexikalischen Präzision von *Sparse Embeddings* (Keywords) zu vereinen, ohne zwei getrennte Indizes (Hybrid Search) pflegen zu müssen.
+
+** Kern-Konzept
+Anstatt zwei Vektoren zu speichern, "brennen" wir die Wichtigkeit eines Wortes direkt in seinen semantischen Vektor ein.
+Dies geschieht durch eine skalare Multiplikation der Dimensionen.
+
+$$ V_{final} = V_{semantic} \times W_{importance} $$
+
+- *V_semantic (Richtung):* Bestimmt durch T5 (Kontext, Bedeutung).
+- *W_importance (Länge):* Bestimmt durch OpenSearch Neural Sparse (Keywords, SPLADE).
+
+* 2. Die Komponenten
+
+** A. Das Semantik-Modell (Encoder)
+- *Modell:* ~google/t5gemma-2-270m-270m~
+- *Typ:* Encoder-Only (wir nutzen nur `last_hidden_state`).
+- *Dimensionen:* 640.
+- *Besonderheit:* Nutzt SentencePiece Tokenizer (erkennt man am Unterstrich `\u2581` bzw. ` `).
+- *Aufgabe:* Erzeugt für jedes Token einen Vektor, der die Bedeutung im Satzkontext repräsentiert.
+
+** B. Das Gewichtungs-Modell (Weighter)
+- *Modell:* ~opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1~
+- *Typ:* BERT-basiert (Masked LM Struktur).
+- *Aufgabe:* Berechnet für Wort-Fragmente einen Wichtigkeits-Score (Logits). Hohe Werte für Entitäten (Hasen, Vertrag), niedrige Werte für Stopwords (und, der).
+
+* 3. Die Indexierungs-Pipeline (Schritt für Schritt)
+
+Dieser Prozess wandelt einen Roh-Text in eine Liste von "Fused Vektoren" um (ColBERT-Format).
+
+** Schritt 1: Sparse Weights Extraktion
+Der Text wird durch das OpenSearch-Modell geschickt. Wir extrahieren Character-Offsets und Gewichte.
+- *Problem:* Das Modell hat ein Sliding-Window (512 Tokens).
+- *Lösung:* Wir iterieren über den Text und sammeln `(Start_Char, End_Char, Gewicht)`.
+
+** Schritt 2: T5 Tokenisierung & Embedding
+Der Text wird vom T5-Tokenizer verarbeitet.
+- *Output:* Ein Tensor der Form `[1, Seq_Len, 640]`.
+- *Offsets:* Wir speichern zu jedem T5-Token, wo es im Text steht (z.B. Zeichen 5 bis 10).
+
+** Schritt 3: Alignment (Mapping)
+Da T5 und OpenSearch unterschiedliche Tokenizer nutzen, passen die Tokens nicht 1:1 übereinander.
+- *Logik:* Wir prüfen per Character-Overlap, welches Sparse-Gewicht zu welchem T5-Token gehört.
+- *Regel:* Bei Überlappung gewinnt das *maximale* Gewicht (`max()`).
+
+** Schritt 4: Word-Boundary Optimization ("Der Hasenkinder-Fix")
+Hier haben wir einen kritischen Fehler in Standard-Token-Embeddings behoben.
+- *Problem:* Zerhackte Wörter (`_Has`, `enk`, `inder`) haben oft abfallende Gewichte. `inder` wird als unwichtig erachtet, obwohl es Teil eines wichtigen Wortes ist.
+- *Lösung (Max-Pooling):* Wir erkennen Wortgrenzen anhand des T5-Sonderzeichens `\u2581`.
+- *Algorithmus:*
+  1. Identifiziere ein ganzes Wort (z.B. "Hasenkinder").
+  2. Finde das stärkste Token in diesem Wort (z.B. `_Has` = 2.25).
+  3. Überschreibe alle Sub-Tokens (`enk`, `inder`) mit diesem Maximalwert.
+- *Effekt:* Auch Teilwörter werden nun extrem stark gewichtet -> Robuster gegen Suchanfragen wie "Kind" oder "Nachwuchs".
+
+** Schritt 5: Fusion (Broadcasting)
+Die optimierten Gewichte (Skalare) werden auf die T5-Vektoren (Vektoren) angewendet.
+- *Mathematik:* `Tensor[Sequence, 640] * Tensor[Sequence, 1]`
+- *Ergebnis:*
+  - Keywords (Hase) werden "lauter" (Vektorlänge > 300).
+  - Stopwords (und) werden "leiser" (Vektorlänge < 50).
+  - Negative Werte von T5 werden "negativer" (Betrag wächst).
+
+* 4. Implementierung (Code)
+
+Hier ist der finale Code der Indexierungs-Logik (ohne Query/Search-Teil).
+
+#+BEGIN_SRC python
+import torch
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForSeq2SeqLM
+
+class FrankensteinIndexer:
+    def __init__(self, t5_model_name, sparse_model_name, device="cpu"):
+        self.device = device
+        
+        # 1. T5 Laden
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(t5_model_name, trust_remote_code=True)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(
+            t5_model_name, trust_remote_code=True, torch_dtype=torch.float16
+        ).to(self.device)
+        
+        # 2. Sparse Laden
+        self.sparse_tokenizer = AutoTokenizer.from_pretrained(sparse_model_name)
+        self.sparse_model = AutoModelForMaskedLM.from_pretrained(sparse_model_name).to(self.device)
+
+    def _get_sparse_weights(self, text):
+        """Holt Gewichte via Sliding Window aus dem Sparse Model"""
+        inputs = self.sparse_tokenizer(
+            text, return_tensors="pt", return_offsets_mapping=True, 
+            truncation=True, max_length=512, stride=64, return_overflowing_tokens=True
+        ).to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.sparse_model(inputs.input_ids)
+        
+        # SPLADE-Logik: log(1 + relu(logits))
+        values, _ = torch.max(torch.log(1 + torch.relu(outputs.logits)), dim=-1)
+        
+        char_weights = []
+        # Mapping über Batches (Chunks) hinweg
+        offset_mapping = inputs.offset_mapping.cpu() # Offsets zurück auf CPU
+        values = values.cpu()
+        
+        for i, offsets in enumerate(offset_mapping):
+            chunk_weights = values[i]
+            for idx, (start, end) in enumerate(offsets):
+                start, end = start.item(), end.item()
+                if start == end: continue # Special Tokens ignorieren
+                weight = chunk_weights[idx].item()
+                char_weights.append((start, end, weight))
+        return char_weights
+
+    def _propagate_word_weights(self, tokens, weights):
+        """
+        Der 'Hasenkinder-Fix': 
+        Verteilt das max. Gewicht eines Wortes auf alle seine Sub-Tokens.
+        """
+        # WICHTIG: Das korrekte T5 SentencePiece Space-Symbol
+        SPIECE_UNDERLINE = "\u2581" 
+        
+        new_weights = []
+        current_word_indices = []
+        current_word_weights = []
+        
+        def flush(idx_list, w_list, out_list):
+            if not idx_list: return
+            max_w = max(w_list) # Max-Pooling
+            for _ in idx_list:
+                out_list.append(max_w)
+
+        for i, (token, weight) in enumerate(zip(tokens, weights)):
+            # Wortanfang erkennen
+            is_start = token.startswith(SPIECE_UNDERLINE) or token.startswith("<") or i == 0
+            
+            if is_start:
+                flush(current_word_indices, current_word_weights, new_weights)
+                current_word_indices = [i]
+                current_word_weights = [weight]
+            else:
+                current_word_indices.append(i)
+                current_word_weights.append(weight)
+                
+        flush(current_word_indices, current_word_weights, new_weights)
+        return new_weights
+
+    def encode_document(self, text):
+        """Die Hauptfunktion: Text -> Fused Embeddings"""
+        
+        # A. Sparse Gewichte holen
+        sparse_data = self._get_sparse_weights(text)
+        
+        # B. T5 Encoden
+        t5_in = self.t5_tokenizer(text, return_tensors="pt", return_offsets_mapping=True).to(self.device)
+        with torch.no_grad():
+            # Nur Encoder nutzen!
+            t5_emb = self.t5_model.get_encoder()(
+                input_ids=t5_in.input_ids, 
+                attention_mask=t5_in.attention_mask
+            ).last_hidden_state
+
+        # C. Alignment (Mapping Sparse -> T5)
+        raw_weights = []
+        offsets = t5_in.offset_mapping[0].cpu()
+        
+        for start, end in offsets:
+            start, end = start.item(), end.item()
+            if start == end: 
+                raw_weights.append(1.0) # Special Token Fallback
+                continue
+            
+            # Finde überlappende Sparse-Gewichte
+            matches = [w for s, e, w in sparse_data if max(start, s) < min(end, e)]
+            raw_weights.append(max(matches) if matches else 1.0)
+
+        # D. Optimierung (Hasenkinder-Fix)
+        t5_tokens = self.t5_tokenizer.convert_ids_to_tokens(t5_in.input_ids[0])
+        optimized_weights = self._propagate_word_weights(t5_tokens, raw_weights)
+        
+        # E. Fusion
+        weight_tensor = torch.tensor(optimized_weights, device=self.device, dtype=t5_emb.dtype)
+        weight_tensor = weight_tensor.unsqueeze(0).unsqueeze(-1) # [1, Seq, 1]
+        
+        fused_embeddings = t5_emb * weight_tensor
+        
+        return fused_embeddings, t5_tokens
+#+END_SRC
+
+* 5. Ergebnisse & Beobachtungen
+
+** Visualisierung (Matplotlib Kurven)
+Wir haben die Amplituden der Vektoren geplottet (Original vs. Fused).
+- *Dimension 30:* Zeigte eine extreme Reaktion auf Entitäten.
+- *Effekt:* - Token `_Has`: Norm stieg von ~23 auf ~346 (Massiver Boost).
+  - Token `_und`: Norm sank nahe 0 (Rauschunterdrückung).
+
+** Verhalten bei der Suche
+Obwohl wir den Search-Code hier auslassen, waren die Erkenntnisse wichtig für die Architektur:
+- *Das Magnet-Problem:* Sehr lange (laute) Vektoren ziehen auch irrelevante Queries an.
+- *Lösung:* Wir haben gelernt, dass wir später beim Retrieval "Quality Checks" (Re-Normalization) brauchen, um echte Semantik von bloßer Lautstärke zu unterscheiden.
+
+* 6. Status Quo
+Wir haben erfolgreich einen **Indexer** gebaut, der Text in hoch-optimierte, gewichtete Vektoren verwandelt. Diese Vektoren sind bereit, in eine Vektordatenbank (Qdrant/Weaviate) mit ColBERT-Support (Multi-Vector) geladen zu werden.

@@ -1,0 +1,64 @@
+#+TITLE: Analyse der Suchmaschine & DTW-Hypothese
+#+DATE: 2025-12-30
+#+AUTHOR: Gemini
+#+OPTIONS: toc:t num:nil
+
+* 1. Status Quo: Debugging-Logs
+Die aktuelle Engine nutzt eine "Dynamik-Analyse" mit einem adaptiven Gate, um Signale vom Rauschen zu trennen. Das funktioniert gut für die Gewichtung, aber das Matching produziert False Positives.
+
+** Beispiel A: Erfolgreiche Dynamik ("Radioaktiver Abfall")
+- *Input:* "Radioaktiver Abfall ist ein Problem der Atomkraft."
+- *Adaptives Gate:* 84.5
+- *Ergebnis:*
+  - Starke Signale (>85): "Radio", "akt", "iver", "Abfall", "Atom", "kraft"
+  - Rauschen (<85): "ist", "ein", "der"
+
+** Beispiel B: Erfolgreiche Dynamik ("Hier schläft ein Kind")
+- *Input:* "Hier schläft ein Kind."
+- *Adaptives Gate:* 74.6
+- *Ergebnis:* "Hier", "schläft", "Kind" wurden korrekt als Signal erkannt.
+
+** Das Problem: Fehlerhafte Matches (Halluzinationen)
+Trotz guter Filterung matcht die Suche semantisch völlig falsche Dokumente mit hohem Score.
+
+*** Suche: 'Gefahr durch Atommüll'
+- *Falsches Ergebnis:* "Der Mietvertrag wurde fristgerecht gekündigt." (Score: 541.7)
+- *Ursache:* Ein Token-Fragment Match: ~['▁At(176)->Cos:0.87']~.
+  - Das System matcht vermutlich das Prefix "At" auf irgendein Wort im Mietvertrag (evtl. "Antrag", "Akt").
+  - Da der "Max Peak" Mechanismus genutzt wird, zieht ein einzelnes starkes Token den ganzen Score hoch.
+
+*** Suche: 'Baby Bettruhe'
+- *Falsches Ergebnis:* "Der Mietvertrag wurde fristgerecht gekündigt." (Score: 115.3)
+- *Match:* ~['▁Bett(83)->Cos:0.81']~ (Vermutlich matcht "Bett" auf Fragmente in anderen Wörtern).
+
+* 2. Lösungsvorschlag: Dynamic Time Warping (DTW)
+Die Idee war, DTW zu nutzen, um die Sequenz der Query gegen die Dokumente zu prüfen, statt nur "Peaks" zu suchen.
+
+** Wie DTW funktionieren würde
+DTW sucht den Pfad der geringsten Kosten durch die Matrix von Query-Token und Dokument-Token. Es berücksichtigt die zeitliche/sequenzielle Abfolge.
+
+- *Szenario:* Query = ~[Gefahr, durch, Atommüll]~ vs. Doc = ~[Hier, ist, Gefahr, wegen, dem, Atommüll]~
+- *Vorteil:* DTW erkennt, dass "Gefahr" und "Atommüll" in der korrekten Reihenfolge auftreten und kann Füllwörter ("wegen", "dem") überspringen ("Warpen").
+
+** Analyse: Hilft DTW hier?
+DTW ist mächtig für Phrasensuche, löst aber das Kernproblem der "Mietvertrag"-Halluzination vermutlich nicht.
+
+- *Problem:* DTW sucht den *besten globalen Pfad*. Wenn das Token-Embedding für "At" mathematisch zu ähnlich zu einem Token im Mietvertrag ist (Cos: 0.87), wird DTW trotzdem versuchen, einen Pfad dort hindurch zu legen.
+- *Performance:* DTW hat eine Komplexität von $O(N \times M)$, was für eine Volltextsuche über viele Dokumente sehr rechenintensiv ist.
+
+* 3. Vergleich: Weighted Peak vs. DTW
+
+| Feature | Aktueller Ansatz (Weighted Peak) | DTW Ansatz |
+| :--- | :--- | :--- |
+| *Logik* | "Gibt es irgendwo ein lautes Signal?" | "Passt der Verlauf der Query zum Verlauf des Satzes?" |
+| *Fehleranfälligkeit* | Hoch bei einzelnen Token-Matches (Outliers dominieren). | Robust gegen Füllwörter, aber anfällig für falsche lokale Matches. |
+| *Performance* | Sehr schnell (Vektor-Ops). | Langsam (Matrix-Berechnung pro Doc). |
+| *Fazit* | Halluziniert bei Polysemie/Fragmenten. | Overkill für Keywords, gut für Zitate. |
+
+* 4. Empfehlung & Fazit
+Das Hauptproblem ist nicht die fehlende Sequenz-Prüfung (die DTW lösen würde), sondern die *Qualität der Token-Matches*. Das Fragment "At" sollte niemals 0.87 Ähnlichkeit zu einem ungleichen Wort haben.
+
+** Nächste Schritte (Priorisiert)
+1. *Embeddings prüfen:* Sicherstellen, dass semantische Embeddings (Sentence-BERT etc.) genutzt werden, nicht nur zeichenbasierte Ähnlichkeit.
+2. *Contextual Matching:* Statt Token-für-Token Vergleich, ganze Sätze oder Phrasen vektorisieren. Dann liegen "Atommüll" und "Mietvertrag" im Vektorraum weit auseinander.
+3. *Thresholding:* Sehr kurze Token ("At") müssen im Score stark bestraft werden (IDF-Gewichtung), damit sie allein kein Ergebnis triggern können.
