@@ -18,6 +18,11 @@ sentencepiece>=0.2
 # Local jina-v3 backend (S3_BACKEND=local) needs einops as a hard
 # import-time dep.
 einops>=0.7
+# Used by several experiments/research/*.py scripts (s3_benchmark,
+# wave_memory_neural, hybrid_peak_retrieval, optimized_interference,
+# advanced_audio_retrieval, s3_production). Not required for the
+# headline onset_combined_test.py.
+sentence-transformers>=2.7
 
 # API surface.
 fastapi>=0.110
