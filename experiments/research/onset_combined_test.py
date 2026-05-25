@@ -9,6 +9,7 @@ Vergleicht:
 4. Token BF (Referenz)
 """
 
+import os
 import numpy as np
 import requests
 import torch
@@ -17,15 +18,34 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
-from transformers import AutoModelForMaskedLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForMaskedLM, AutoTokenizer
 from datasets import load_dataset
 
 
 # =============================================================================
-# ENCODERS
+# ENCODERS -- two backends, switchable via S3_BACKEND env var.
+#
+#   S3_BACKEND=http (default)
+#     Calls two text-embeddings-inference services:
+#       - localhost:8200  pooled jina-embeddings-v3
+#       - localhost:8202  token-level jina-embeddings-v3
+#     The original setup. Brings up via docker-compose with the matching
+#     TEI configs.
+#
+#   S3_BACKEND=local
+#     Loads jinaai/jina-embeddings-v3 directly via transformers (one
+#     shared model on CUDA), exposes pooled and per-token views without
+#     any HTTP service. Useful on RunPod / Modal / any pod without
+#     docker. Numbers should agree with the HTTP backend up to float
+#     precision and tokenizer rounding.
 # =============================================================================
 
+BACKEND = os.environ.get("S3_BACKEND", "http").lower()
+LOCAL_MODEL_NAME = os.environ.get("S3_LOCAL_MODEL", "jinaai/jina-embeddings-v3")
+
+
 class TokenEncoder:
+    """Per-token embeddings via TEI service at :8202 (token-level mode)."""
     def __init__(self, url: str = "http://localhost:8202"):
         self.url = url
 
@@ -40,6 +60,7 @@ class TokenEncoder:
 
 
 class PooledEncoder:
+    """Sentence-level mean-pooled embedding via TEI service at :8200."""
     def __init__(self, url: str = "http://localhost:8200"):
         self.url = url
 
@@ -50,6 +71,67 @@ class PooledEncoder:
         )
         response.raise_for_status()
         return np.array(response.json()["data"][0]["embedding"])
+
+
+# --- Local in-process jina-v3 backend (no HTTP, no docker required) ---
+
+_JINA = {"model": None, "tokenizer": None, "device": None}
+
+
+def _load_local_jina():
+    if _JINA["model"] is not None:
+        return _JINA["model"], _JINA["tokenizer"], _JINA["device"]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[backend:local] loading {LOCAL_MODEL_NAME} on {device}...", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_NAME, trust_remote_code=True)
+    model = AutoModel.from_pretrained(LOCAL_MODEL_NAME, trust_remote_code=True)
+    model = model.to(device).eval()
+    _JINA.update(model=model, tokenizer=tokenizer, device=device)
+    return model, tokenizer, device
+
+
+class LocalJinaPooledEncoder:
+    """Sentence-level mean-pooled jina-v3 embedding via direct transformers call."""
+    def __init__(self):
+        _load_local_jina()
+
+    def encode(self, text: str) -> np.ndarray:
+        model, tok, device = _load_local_jina()
+        text = text[:4000]
+        with torch.no_grad():
+            inputs = tok(text, return_tensors="pt", truncation=True, max_length=8192).to(device)
+            out = model(**inputs)
+            # mean-pool over tokens with attention mask
+            mask = inputs["attention_mask"].unsqueeze(-1).float()
+            summed = (out.last_hidden_state * mask).sum(dim=1)
+            pooled = summed / mask.sum(dim=1).clamp(min=1e-6)
+            emb = torch.nn.functional.normalize(pooled, p=2, dim=1)
+        return emb[0].cpu().float().numpy()
+
+
+class LocalJinaTokenEncoder:
+    """Per-token jina-v3 embeddings via direct transformers call."""
+    def __init__(self):
+        _load_local_jina()
+
+    def encode(self, text: str) -> np.ndarray:
+        model, tok, device = _load_local_jina()
+        text = text[:4000]
+        with torch.no_grad():
+            inputs = tok(text, return_tensors="pt", truncation=True, max_length=8192).to(device)
+            out = model(**inputs)
+            mask = inputs["attention_mask"][0].bool()
+            tokens = out.last_hidden_state[0][mask]
+            tokens = torch.nn.functional.normalize(tokens, p=2, dim=-1)
+        return tokens.cpu().float().numpy()
+
+
+def make_pooled_encoder():
+    return LocalJinaPooledEncoder() if BACKEND == "local" else PooledEncoder()
+
+
+def make_token_encoder():
+    return LocalJinaTokenEncoder() if BACKEND == "local" else TokenEncoder()
 
 
 class SpladeEncoder:
@@ -400,20 +482,32 @@ def load_dataset_small(name: str, max_docs: int = 500, max_queries: int = 100):
 # =============================================================================
 
 def main():
+    import argparse
+    import json as _json
+    import datetime as _dt
+    from pathlib import Path as _Path
+    parser = argparse.ArgumentParser(description="Onset + Combined retrieval benchmark.")
+    parser.add_argument("--dataset", default="scifact", help="BEIR dataset slug (default: scifact)")
+    parser.add_argument("--max-docs", type=int, default=1000, help="Truncate corpus (default: 1000)")
+    parser.add_argument("--max-queries", type=int, default=100, help="Cap queries before filtering (default: 100)")
+    parser.add_argument("--output", default=None, help="Write summary JSON to this path (default: results/onset_combined_<timestamp>.json)")
+    args = parser.parse_args()
+
     print("=" * 70)
     print("ONSET + COMBINED TEST")
     print("=" * 70)
 
     # Encoders
     print("\n1. Loading encoders...")
-    token_encoder = TokenEncoder()
-    pooled_encoder = PooledEncoder()
+    print(f"[backend] S3_BACKEND={BACKEND}")
+    token_encoder = make_token_encoder()
+    pooled_encoder = make_pooled_encoder()
     splade_encoder = SpladeEncoder(top_k=64)
     print("   OK")
 
     # Dataset
     print("\n2. Loading dataset...")
-    docs, queries, relevance = load_dataset_small("scifact", max_docs=1000, max_queries=100)
+    docs, queries, relevance = load_dataset_small(args.dataset, max_docs=args.max_docs, max_queries=args.max_queries)
     if docs is None:
         return
 
@@ -498,6 +592,46 @@ def main():
         print("\n  --> Combined+Onset ist schneller, aber schlechterer Recall")
     else:
         print("\n  --> Combined ist besser")
+
+    # Persist summary JSON (the artifact the README was missing).
+    out_path = args.output
+    if out_path is None:
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+        out_dir = _Path(__file__).resolve().parents[2] / "results" / "onset_combined"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"onset_combined_{args.dataset}_{ts}.json"
+    summary_payload = {
+        "config": {
+            "dataset": args.dataset,
+            "max_docs": args.max_docs,
+            "max_queries_before_filter": args.max_queries,
+            "n_queries_evaluated": len(queries),
+            "n_docs_indexed": len(index.docs),
+            "avg_segments_per_doc": float(avg_segs),
+            "backend": BACKEND,
+            "local_model": LOCAL_MODEL_NAME if BACKEND == "local" else None,
+            "splade_model": "naver/splade-cocondenser-ensembledistil",
+            "top_k": 10,
+        },
+        "results": {
+            name: {"recall_at_10": float(recall), "avg_time_ms": float(avg_time)}
+            for name, (recall, avg_time) in results.items()
+        },
+        "deltas": {
+            "combined_onset_vs_combined_recall_pp": float((combined_onset_recall - combined_recall) * 100),
+            "combined_onset_vs_combined_time_ratio": float(combined_onset_time / combined_time),
+            "combined_onset_vs_token_bf_recall_pp": float((combined_onset_recall - token_bf_recall) * 100),
+            "combined_onset_vs_token_bf_time_ratio": float(combined_onset_time / results["Token BF"][1]),
+        },
+        "caveat": (
+            "max_docs truncation interacts with query filtering: queries are "
+            "kept only when at least one of their relevant docs survives the "
+            "first max_docs documents. Easy queries are over-represented vs a "
+            "uniform-random query sample."
+        ),
+    }
+    _Path(out_path).write_text(_json.dumps(summary_payload, indent=2))
+    print(f"\n[artifact] wrote {out_path}")
 
 
 if __name__ == "__main__":

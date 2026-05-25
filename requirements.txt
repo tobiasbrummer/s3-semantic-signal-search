@@ -10,6 +10,10 @@ transformers>=4.40
 datasets>=2.14
 huggingface-hub>=0.23
 sentencepiece>=0.2
+# Local jina-v3 backend (S3_BACKEND=local) needs the einops kernels and
+# the optional FlashAttention path the model card recommends. einops is
+# the actual import-time hard dep; the rest is upstream-jina specific.
+einops>=0.7
 
 # API surface.
 fastapi>=0.110
