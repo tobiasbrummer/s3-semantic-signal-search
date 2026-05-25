@@ -14,15 +14,36 @@ Instead of arbitrary 512-token chunking, S3 uses:
 - **Onset detection** to find natural segment boundaries (no arbitrary cuts)
 - **Combined retrieval** (dense + SPLADE sparse) with onset-based refinement
 
-## Key Results (SciFact, 1000 docs, 70 queries)
+## Key Results (BEIR/SciFact, 1000 docs, ~70 queries)
 
 | Method | Recall@10 | Time | vs Baseline |
 |--------|-----------|------|-------------|
 | Pooled (baseline) | 84.3% | 10ms | -- |
-| Combined+Onset | **94.3%** | **373ms** | **+10%** |
-| Token Brute-Force | 94.3% | 3475ms | +10% |
+| Combined+Onset | **94.3%** | **373ms** | **+10pp** |
+| Token Brute-Force | 94.3% | 3475ms | +10pp |
 
-Combined+Onset achieves token-level recall at 10x the speed of brute force.
+**Combined+Onset matches token-level brute-force recall at ~1/9 the
+brute-force compute.** Run: `experiments/research/onset_combined_test.py`.
+Requires two HTTP embedding services running locally:
+
+- `localhost:8200` -- pooled (mean) sentence embeddings (e.g. text-embeddings-inference with `jinaai/jina-embeddings-v3`)
+- `localhost:8202` -- SPLADE token-level sparse embeddings (e.g. text-embeddings-inference with `naver/splade-cocondenser-ensembledistil`)
+
+The `docker-compose.yaml` here is the dev container for the engine, NOT
+the eval services -- those need to be brought up separately.
+
+### Caveats worth knowing about
+
+- **Single run** on the BEIR SciFact slice, no multi-seed averaging.
+- **Corpus truncation interacts with query filtering.** The eval script
+  truncates the corpus to 1000 docs and then filters queries to those
+  whose relevant docs survive the truncation. Easy queries (relevant
+  doc is in the first 1000) are over-represented vs. a uniform-random
+  query sample. The numbers above are honest for the *filtered* query
+  set; they should not be read as "94.3% recall on SciFact in general".
+- **No saved JSON artifact** for this run yet -- the result is in shell
+  output from the original execution. Re-run from a cold pod with the
+  two TEI services up to reproduce.
 
 ## Project Structure
 
@@ -65,7 +86,11 @@ This project explores several novel concepts:
 
 ```bash
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm  # sentence segmentation
 ```
+
+For docker-based dev: `MODELS_DIR=$HOME/.cache/huggingface docker compose up`
+(set `MODELS_DIR` so HF cache persists across rebuilds).
 
 ## Usage
 

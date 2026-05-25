@@ -1,10 +1,14 @@
 services:
+  # Dev container with GPU passthrough. Mount your local HuggingFace cache
+  # into /models so model weights are not re-downloaded on every rebuild.
   ml-service:
     build: .
-    container_name: ml-container
+    container_name: s3-ml
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Override HF_HOME so cached weights live in /models.
+      - HF_HOME=/models/huggingface
     deploy:
       resources:
         reservations:
@@ -13,7 +17,9 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      - ./src:/workspace                                        # Dein Code & Arbeitsverzeichnis
-      - /home/t0bybr/Dokumente/AI/models:/workspace/models      # Dein persistenten Modelle-Ordner
+      - ./src:/workspace
+      # Set MODELS_DIR before `docker compose up` to point at your local
+      # HF cache (e.g. export MODELS_DIR=$HOME/.cache/huggingface). Falls
+      # back to a sibling ./models directory.
+      - ${MODELS_DIR:-./models}:/models
     tty: true
-

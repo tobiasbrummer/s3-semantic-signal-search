@@ -1,2 +1,20 @@
-numpy
-spacy
+# Core deps for the engine + research scripts.
+numpy>=1.24
+scipy>=1.10
+spacy>=3.7
+requests>=2.31
+
+# Embedding / retrieval stack.
+torch>=2.1
+transformers>=4.40
+datasets>=2.14
+huggingface-hub>=0.23
+sentencepiece>=0.2
+
+# API surface.
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.5
+
+# Test runner (see pytest.ini).
+pytest>=8.0
