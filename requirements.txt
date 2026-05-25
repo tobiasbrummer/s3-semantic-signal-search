@@ -6,13 +6,17 @@ requests>=2.31
 
 # Embedding / retrieval stack.
 torch>=2.1
-transformers>=4.40
+# jina-embeddings-v3 ships a custom XLMRobertaLoRA class that depends on
+# the transformers 4.x model-base API (uses `all_tied_weights_keys`,
+# which transformers 5.x renamed). Pin to <5 to keep S3_BACKEND=local
+# working. SPLADE (naver/splade-cocondenser-ensembledistil) is fine on
+# either side.
+transformers>=4.40,<5.0
 datasets>=2.14
-huggingface-hub>=0.23
+huggingface-hub>=0.23,<1.0
 sentencepiece>=0.2
-# Local jina-v3 backend (S3_BACKEND=local) needs the einops kernels and
-# the optional FlashAttention path the model card recommends. einops is
-# the actual import-time hard dep; the rest is upstream-jina specific.
+# Local jina-v3 backend (S3_BACKEND=local) needs einops as a hard
+# import-time dep.
 einops>=0.7
 
 # API surface.
