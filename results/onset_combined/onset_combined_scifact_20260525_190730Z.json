@@ -1,0 +1,39 @@
+{
+  "config": {
+    "dataset": "scifact",
+    "max_docs": 1000,
+    "max_queries_before_filter": 100,
+    "n_queries_evaluated": 70,
+    "n_docs_indexed": 1000,
+    "avg_segments_per_doc": 6.088,
+    "backend": "local",
+    "local_model": "jinaai/jina-embeddings-v3",
+    "splade_model": "naver/splade-cocondenser-ensembledistil",
+    "top_k": 10
+  },
+  "results": {
+    "Pooled (Baseline)": {
+      "recall_at_10": 0.8571428571428571,
+      "avg_time_ms": 4.376864433288574
+    },
+    "Combined": {
+      "recall_at_10": 0.9428571428571428,
+      "avg_time_ms": 255.56828975677493
+    },
+    "Combined + Onset": {
+      "recall_at_10": 0.9285714285714286,
+      "avg_time_ms": 174.03148242405484
+    },
+    "Token BF": {
+      "recall_at_10": 0.9428571428571428,
+      "avg_time_ms": 1630.7000500815257
+    }
+  },
+  "deltas": {
+    "combined_onset_vs_combined_recall_pp": -1.4285714285714235,
+    "combined_onset_vs_combined_time_ratio": 0.6809588254852788,
+    "combined_onset_vs_token_bf_recall_pp": -1.4285714285714235,
+    "combined_onset_vs_token_bf_time_ratio": 0.10672194583875451
+  },
+  "caveat": "max_docs truncation interacts with query filtering: queries are kept only when at least one of their relevant docs survives the first max_docs documents. Easy queries are over-represented vs a uniform-random query sample."
+}

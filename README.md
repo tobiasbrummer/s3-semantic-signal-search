@@ -14,36 +14,61 @@ Instead of arbitrary 512-token chunking, S3 uses:
 - **Onset detection** to find natural segment boundaries (no arbitrary cuts)
 - **Combined retrieval** (dense + SPLADE sparse) with onset-based refinement
 
-## Key Results (BEIR/SciFact, 1000 docs, ~70 queries)
+## Key Results (BEIR/SciFact, 1000 docs, 70 queries after filtering)
 
-| Method | Recall@10 | Time | vs Baseline |
-|--------|-----------|------|-------------|
-| Pooled (baseline) | 84.3% | 10ms | -- |
-| Combined+Onset | **94.3%** | **373ms** | **+10pp** |
-| Token Brute-Force | 94.3% | 3475ms | +10pp |
+Saved artifact: [`results/onset_combined/onset_combined_scifact_20260525_190730Z.json`](results/onset_combined/onset_combined_scifact_20260525_190730Z.json)
+(jina-embeddings-v3 + SPLADE-cocondenser, A100, 2026-05-25).
 
-**Combined+Onset matches token-level brute-force recall at ~1/9 the
-brute-force compute.** Run: `experiments/research/onset_combined_test.py`.
-Requires two HTTP embedding services running locally:
+| Method | Recall@10 | Time | vs Pooled | vs Token-BF |
+|--------|-----------|------|-----------|-------------|
+| Pooled (baseline) | 85.7% | 4 ms | -- | -8.6 pp |
+| Combined (dense + SPLADE RRF) | **94.3%** | 256 ms | +8.6 pp | **0.0 pp** |
+| Combined + Onset | 92.9% | **174 ms** | +7.1 pp | -1.4 pp |
+| Token Brute-Force | 94.3% | 1631 ms | +8.6 pp | -- |
 
-- `localhost:8200` -- pooled (mean) sentence embeddings (e.g. text-embeddings-inference with `jinaai/jina-embeddings-v3`)
-- `localhost:8202` -- SPLADE token-level sparse embeddings (e.g. text-embeddings-inference with `naver/splade-cocondenser-ensembledistil`)
+Two distinct findings sit in this table; the previous wording
+("Combined+Onset matches token-BF at ~1/9 compute") conflated them.
+The honest reading is:
 
-The `docker-compose.yaml` here is the dev container for the engine, NOT
-the eval services -- those need to be brought up separately.
+1. **Combined (dense + SPLADE via RRF) matches token-level brute-force
+   recall** -- 94.3% vs 94.3% -- at roughly **1/6** the compute
+   (256 ms vs 1631 ms). The "matches" claim lives entirely on this line.
+
+2. **Onset segmentation adds speed** -- Combined+Onset is ~32% faster
+   than Combined (174 ms vs 256 ms), pushing the speedup vs Token-BF
+   to **~1/9**. The cost is -1.4 pp recall vs both Combined and
+   Token-BF. So Onset is a tunable knob (more speed for a small recall
+   hit), not a free win.
+
+### Running the benchmark
+
+There are two backends, selected via the `S3_BACKEND` env var:
+
+```bash
+# Default: HTTP backend. Needs two text-embeddings-inference services up:
+#   :8200  pooled jina-embeddings-v3
+#   :8202  SPLADE token-level jina-embeddings-v3
+# docker-compose.yaml here is the dev container for the engine, NOT
+# the eval services. Bring those up separately.
+python experiments/research/onset_combined_test.py
+
+# Self-contained: jina-v3 loaded directly via transformers, no HTTP needed.
+# What produced the saved artifact above.
+S3_BACKEND=local python experiments/research/onset_combined_test.py
+```
 
 ### Caveats worth knowing about
 
 - **Single run** on the BEIR SciFact slice, no multi-seed averaging.
 - **Corpus truncation interacts with query filtering.** The eval script
-  truncates the corpus to 1000 docs and then filters queries to those
-  whose relevant docs survive the truncation. Easy queries (relevant
-  doc is in the first 1000) are over-represented vs. a uniform-random
-  query sample. The numbers above are honest for the *filtered* query
-  set; they should not be read as "94.3% recall on SciFact in general".
-- **No saved JSON artifact** for this run yet -- the result is in shell
-  output from the original execution. Re-run from a cold pod with the
-  two TEI services up to reproduce.
+  truncates the corpus to 1000 docs and then keeps only the queries
+  whose relevant docs survive that truncation. Easy queries (relevant
+  doc in the first 1000) are over-represented vs. a uniform-random
+  query sample. The 70 evaluated queries are the post-filter set.
+- The two backends will not produce byte-identical scores -- different
+  inference paths into jina-v3, different attention implementations
+  (PyTorch native vs FlashAttention vs TEI's batched kernels) -- but
+  they should agree to within ~1 pp on the head-line numbers.
 
 ## Project Structure
 
